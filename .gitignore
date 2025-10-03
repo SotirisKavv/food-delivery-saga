@@ -151,3 +151,6 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# Charts
+charts/

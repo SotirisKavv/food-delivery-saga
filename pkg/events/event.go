@@ -1,6 +1,9 @@
-package models
+package events
 
-import "time"
+import (
+	"food-delivery-saga/pkg/models"
+	"time"
+)
 
 type EventType string
 
@@ -30,11 +33,30 @@ type Metadata struct {
 	Producer      string    `json:"producer"`
 }
 
-type EventOrderPlaced struct {
-	Metadata        Metadata `json:"mtdt"`
-	CustomerId      string   `json:"customer_id"`
-	PaymentMethodId string   `json:"pm_id"`
-	AmountCents     int64    `json:"amount_cents"`
-	Currency        string   `json:"currency"`
-	Items           []Item   `json:"items"`
+type DomainEvent interface {
+	GetMetadata() Metadata
 }
+
+// order-placed
+type EventOrderPlaced struct {
+	Metadata        Metadata               `json:"mtdt"`
+	CustomerId      string                 `json:"customer_id"`
+	PaymentMethodId string                 `json:"pm_id"`
+	AmountCents     int64                  `json:"amount_cents"`
+	Currency        string                 `json:"currency"`
+	RestaurantId    string                 `json:"restaurant_id"`
+	Items           map[string]models.Item `json:"items"`
+}
+
+func (op EventOrderPlaced) GetMetadata() Metadata { return op.Metadata }
+
+// items-reserved/reservation-failed
+type EventItemsProcessed struct {
+	Metadata      Metadata               `json:"mtdt"`
+	RestaurantId  string                 `json:"restaurant_id"`
+	ItemsReserved map[string]models.Item `json:"items_reserved"`
+	Reason        string                 `json:"reason"`
+	Success       bool                   `json:"success"`
+}
+
+func (ip EventItemsProcessed) GetMetadata() Metadata { return ip.Metadata }

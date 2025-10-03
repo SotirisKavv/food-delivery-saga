@@ -21,23 +21,23 @@ type Item struct {
 }
 
 type Order struct {
-	OrderId         string `json:"order_id"`
-	CustomerId      string `json:"customer_id"`
-	RestaurantId    string `json:"restaurant_id"`
-	Items           []Item `json:"items"`
-	Amount          int64  `json:"amount_cents"`
-	Currency        string `json:"currency"`
-	DeliveryAddress string `json:"delivery_address"`
+	OrderId         string          `json:"order_id"`
+	CustomerId      string          `json:"customer_id"`
+	RestaurantId    string          `json:"restaurant_id"`
+	Items           map[string]Item `json:"items"`
+	Amount          int64           `json:"amount_cents"`
+	Currency        string          `json:"currency"`
+	DeliveryAddress string          `json:"delivery_address"`
 }
 
 type OrderRequest struct {
-	CustomerId      string `json:"customer_id"`
-	RestaurantId    string `json:"restaurant_id"`
-	Items           []Item `json:"items"`
-	PaymentMethodId string `json:"pm_id"`
-	Amount          int64  `json:"amount_cents"`
-	Currency        string `json:"currency"`
-	DeliveryAddress string `json:"delivery_address"`
+	CustomerId      string          `json:"customer_id"`
+	RestaurantId    string          `json:"restaurant_id"`
+	Items           map[string]Item `json:"items"`
+	PaymentMethodId string          `json:"pm_id"`
+	Amount          int64           `json:"amount_cents"`
+	Currency        string          `json:"currency"`
+	DeliveryAddress string          `json:"delivery_address"`
 }
 
 type OrderResponse struct {
@@ -45,4 +45,9 @@ type OrderResponse struct {
 	Status        string `json:"status"`
 	Message       string `json:"message"`
 	CorrelationID string `json:"correlation_id"`
+}
+
+type Restaurant struct {
+	RestaurantId string          `json:"restaurant_id"`
+	Items        map[string]Item `json:"items"`
 }

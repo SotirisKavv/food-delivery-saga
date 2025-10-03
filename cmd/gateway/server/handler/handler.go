@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
 	"food-delivery-saga/pkg/utils"
@@ -13,10 +14,10 @@ import (
 )
 
 type Handler struct {
-	Producer kafka.Producer
+	Producer *kafka.Producer
 }
 
-func NewHandler(producer kafka.Producer) *Handler {
+func NewHandler(producer *kafka.Producer) *Handler {
 	return &Handler{
 		Producer: producer,
 	}
@@ -31,10 +32,10 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	orderEvent := models.EventOrderPlaced{
-		Metadata: models.Metadata{
+	orderEvent := events.EventOrderPlaced{
+		Metadata: events.Metadata{
 			MessageId:     uuid.NewString(),
-			Type:          models.EvtTypeOrderPlaced,
+			Type:          events.EvtTypeOrderPlaced,
 			OrderId:       uuid.NewString(),
 			CorrelationId: uuid.NewString(),
 			Timestamp:     time.Now().UTC(),
@@ -44,11 +45,12 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		PaymentMethodId: req.PaymentMethodId,
 		AmountCents:     req.Amount,
 		Currency:        req.Currency,
+		RestaurantId:    req.RestaurantId,
 		Items:           req.Items,
 	}
 
 	inventoryMessage := kafka.EventMessage{
-		Topic: kafka.TopicInventory,
+		Topic: kafka.TopicOrder,
 		Key:   orderEvent.Metadata.OrderId,
 		Event: orderEvent,
 	}

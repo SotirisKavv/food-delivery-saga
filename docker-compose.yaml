@@ -115,6 +115,24 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # Inventory Service
+  inventory-svc:
+    build:
+      context: .
+      dockerfile: deployments/inventory/Dockerfile
+    container_name: inventory-svc
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_completed_successfully
+    environment:
+      - KAFKA_BROKERS
+    env_file:
+      - .env
+    networks:
+      - order-network
+
 networks:
   order-network:
     name: order-network

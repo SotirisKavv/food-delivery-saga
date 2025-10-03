@@ -34,7 +34,8 @@ func NewConsumer(conf ConsumerConfig) *Consumer {
 	}
 }
 
-type MessageHandler func(ctx context.Context, message kafka.Message) error
+type KafkaMessage kafka.Message
+type MessageHandler func(ctx context.Context, message KafkaMessage) error
 
 func (c *Consumer) ConsumeMessages(ctx context.Context, handler MessageHandler) error {
 	for {
@@ -48,7 +49,7 @@ func (c *Consumer) ConsumeMessages(ctx context.Context, handler MessageHandler) 
 				continue
 			}
 
-			if err := handler(ctx, msg); err != nil {
+			if err := handler(ctx, KafkaMessage(msg)); err != nil {
 				log.Printf("Failed to handle message: %v", err) //	TODO: implement send to DLQ
 				continue
 			}
@@ -62,7 +63,7 @@ func (c *Consumer) ConsumeMessages(ctx context.Context, handler MessageHandler) 
 
 // re-try logic
 func (c *Consumer) ConsumeWithRetry(ctx context.Context, handler MessageHandler, maxAttempts int) error {
-	return c.ConsumeMessages(ctx, func(ctx context.Context, message kafka.Message) error {
+	return c.ConsumeMessages(ctx, func(ctx context.Context, message KafkaMessage) error {
 		var lastErr error
 
 		for i := 1; i <= maxAttempts; i++ {

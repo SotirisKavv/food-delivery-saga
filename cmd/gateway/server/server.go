@@ -30,10 +30,8 @@ type ServerConfig struct {
 }
 
 func NewServer(conf ServerConfig, prodConf kafka.ProducerConfig) *Server {
-	producer := kafka.NewProducer(kafka.ProducerConfig{
-		Brokers: prodConf.Brokers,
-	})
-	orderHandler := handler.NewHandler(*producer)
+	producer := kafka.NewProducer(prodConf)
+	orderHandler := handler.NewHandler(producer)
 
 	server := &Server{
 		Config:   conf,
