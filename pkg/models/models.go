@@ -51,3 +51,10 @@ type Restaurant struct {
 	RestaurantId string          `json:"restaurant_id"`
 	Items        map[string]Item `json:"items"`
 }
+
+type PaymentDetails struct {
+	OrderId         string `json:"order_id"`
+	Amount          int64  `json:"amount"`
+	Currency        string `json:"currency"`
+	PaymentMethodId string `json:"pm_id"`
+}

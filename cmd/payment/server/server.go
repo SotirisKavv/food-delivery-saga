@@ -3,10 +3,9 @@ package server
 import (
 	"context"
 	"errors"
-	"food-delivery-saga/cmd/inventory/server/handler"
+	"food-delivery-saga/cmd/payment/server/handler"
 	"food-delivery-saga/pkg/kafka"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -23,18 +22,18 @@ type Server struct {
 func NewServer(prodConf kafka.ProducerConfig, consConf kafka.ConsumerConfig) *Server {
 	producer := kafka.NewProducer(prodConf)
 	consumer := kafka.NewConsumer(consConf)
-	inventoryHandler := handler.NewHandler(producer)
+	handler := handler.NewHandler(producer)
 
 	return &Server{
 		Producer: producer,
 		Consumer: consumer,
-		Handler:  inventoryHandler,
+		Handler:  handler,
 	}
 }
 
 func (s *Server) Start() error {
-	log.Println("Starting Inventory Service...")
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	log.Println("Starting Payment Service...")
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -77,6 +76,6 @@ func (s *Server) HandleShutdown(ctx context.Context, g *errgroup.Group) error {
 		}
 	default:
 	}
-	log.Println("Inventory Service stopped cleanly")
+	log.Println("Payment Service stopped cleanly")
 	return nil
 }

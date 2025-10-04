@@ -19,11 +19,6 @@ type Handler struct {
 	Repository repository.Repository[models.Restaurant]
 }
 
-var acceptedEvents []events.EventType = []events.EventType{
-	events.EvtTypeOrderPlaced,
-	events.EvtTypePaymentVoided,
-}
-
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
 	repo, _ := repository.NewRepository(repository.RepositoryMemory, func(r models.Restaurant) string {

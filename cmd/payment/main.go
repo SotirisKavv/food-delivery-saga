@@ -1,7 +1,7 @@
 package main
 
 import (
-	"food-delivery-saga/cmd/inventory/server"
+	"food-delivery-saga/cmd/payment/server"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/utils"
 	"log"
@@ -21,8 +21,8 @@ func main() {
 
 	consConf := kafka.ConsumerConfig{
 		Brokers: brokers,
-		Topics:  []string{kafka.TopicOrder, kafka.TopicInventory},
-		GroupId: "inventory-svc",
+		Topics:  []string{kafka.TopicInventory},
+		GroupId: "payment-svc",
 	}
 
 	server := server.NewServer(prodConf, consConf)

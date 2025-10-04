@@ -18,6 +18,7 @@ type RepositoryType string
 
 const (
 	RepositoryMemory RepositoryType = "memory"
+	RepositoryRedis  RepositoryType = "cache"
 )
 
 func NewRepository[T any](repoType RepositoryType, idExtractor IDExtractor[T], opts ...any) (Repository[T], error) {
