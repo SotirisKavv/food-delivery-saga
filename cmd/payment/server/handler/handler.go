@@ -19,7 +19,7 @@ type Handler struct {
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
 	paymentProcessor, _ := paymentprocessor.NewProcessor(paymentprocessor.ProcessorMock)
-	repo, _ := repository.NewRepository(repository.RepositoryRedis, func(pd models.PaymentDetails) string {
+	repo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(pd models.PaymentDetails) string {
 		return pd.OrderId
 	})
 
@@ -44,6 +44,6 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	return nil
 }
 
-func (h *Handler) OnItemsReserved(evt events.EventOrderPlaced) error {
+func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 	return nil
 }

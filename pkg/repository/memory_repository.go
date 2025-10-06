@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -20,7 +21,7 @@ func NewMemoryRepo[T any](idFn IDExtractor[T]) *MemoryRepository[T] {
 	}
 }
 
-func (r *MemoryRepository[T]) Load(id string) (T, error) {
+func (r *MemoryRepository[T]) Load(ctx context.Context, id string) (T, error) {
 	var zero T
 	r.MU.RLock()
 	defer r.MU.RUnlock()
@@ -31,14 +32,14 @@ func (r *MemoryRepository[T]) Load(id string) (T, error) {
 	return v, nil
 }
 
-func (r *MemoryRepository[T]) Save(entity T) error {
+func (r *MemoryRepository[T]) Save(ctx context.Context, entity T) error {
 	r.MU.Lock()
 	defer r.MU.Unlock()
 	r.Items[r.IdFn(entity)] = entity
 	return nil
 }
 
-func (r *MemoryRepository[T]) Update(entity T) error {
+func (r *MemoryRepository[T]) Update(ctx context.Context, entity T) error {
 	r.MU.Lock()
 	defer r.MU.Unlock()
 	id := r.IdFn(entity)
@@ -49,7 +50,7 @@ func (r *MemoryRepository[T]) Update(entity T) error {
 	return nil
 }
 
-func (r *MemoryRepository[T]) Delete(id string) error {
+func (r *MemoryRepository[T]) Delete(ctx context.Context, id string) error {
 	r.MU.Lock()
 	defer r.MU.Unlock()
 	if _, ok := r.Items[id]; !ok {
@@ -59,7 +60,7 @@ func (r *MemoryRepository[T]) Delete(id string) error {
 	return nil
 }
 
-func (r *MemoryRepository[T]) List(filter any) ([]T, error) {
+func (r *MemoryRepository[T]) List(ctx context.Context, filter any) ([]T, error) {
 	r.MU.RLock()
 	defer r.MU.RUnlock()
 	itemsList := make([]T, 0, len(r.Items))

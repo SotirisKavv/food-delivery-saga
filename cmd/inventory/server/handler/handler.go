@@ -21,11 +21,14 @@ type Handler struct {
 
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
-	repo, _ := repository.NewRepository(repository.RepositoryMemory, func(r models.Restaurant) string {
+	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+
+	repo, _ := repository.NewRepository(ctx, repository.RepositoryMemory, func(r models.Restaurant) string {
 		return r.RestaurantId
 	})
 
-	_ = seedInventory(repo)
+	_ = seedInventory(ctx, repo)
 	h := &Handler{
 		Producer:   producer,
 		Dispatcher: dispatcher,
@@ -41,7 +44,10 @@ func (h *Handler) HandleMessage(ctx context.Context, message kafka.KafkaMessage)
 }
 
 func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
-	inventory, err := h.Repository.Load(evt.RestaurantId)
+	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+
+	inventory, err := h.Repository.Load(ctx, evt.RestaurantId)
 	if err != nil {
 		return fmt.Errorf("Failed to Load resource with id %s: %w", evt.RestaurantId, err)
 	}
@@ -69,7 +75,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 		inventory.Items[id] = dish
 	}
 
-	if err := h.Repository.Update(inventory); err != nil {
+	if err := h.Repository.Update(ctx, inventory); err != nil {
 		return fmt.Errorf("Failed to update inventory: %w", err)
 	}
 	log.Printf("Current Inventory after update: %+v", inventory)
@@ -128,7 +134,7 @@ func (h *Handler) PublishItemsReserved(evt events.EventOrderPlaced) error {
 	return h.Producer.PublishEvent(context.Background(), kafkaMessage)
 }
 
-func seedInventory(repo repository.Repository[models.Restaurant]) error {
+func seedInventory(ctx context.Context, repo repository.Repository[models.Restaurant]) error {
 	restaurants := []models.Restaurant{
 		{
 			RestaurantId: "resto-1",
@@ -149,7 +155,7 @@ func seedInventory(repo repository.Repository[models.Restaurant]) error {
 	}
 
 	for _, r := range restaurants {
-		if err := repo.Save(r); err != nil {
+		if err := repo.Save(ctx, r); err != nil {
 			return err
 		}
 	}
