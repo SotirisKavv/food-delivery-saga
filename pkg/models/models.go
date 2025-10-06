@@ -54,7 +54,16 @@ type Restaurant struct {
 
 type PaymentDetails struct {
 	OrderId         string `json:"order_id"`
+	CustomerId      string `json:"customer_id"`
 	Amount          int64  `json:"amount"`
 	Currency        string `json:"currency"`
 	PaymentMethodId string `json:"pm_id"`
+}
+
+type PaymentResult struct {
+	Success       bool   `json:"success"`
+	TransactionID string `json:"transaction_id"`
+	Amount        int64  `json:"amount"`
+	Currency      string `json:"currency"`
+	FailureReason string `json:"reason"`
 }

@@ -39,7 +39,6 @@ func NewHandler(producer *kafka.Producer) *Handler {
 }
 
 func (h *Handler) HandleMessage(ctx context.Context, message kafka.KafkaMessage) error {
-
 	return h.Dispatcher.Dispatch(message.Value)
 }
 
@@ -47,6 +46,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
+	log.Printf("Processing %+v", evt)
 	inventory, err := h.Repository.Load(ctx, evt.RestaurantId)
 	if err != nil {
 		return fmt.Errorf("Failed to Load resource with id %s: %w", evt.RestaurantId, err)

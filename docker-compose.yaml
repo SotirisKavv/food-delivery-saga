@@ -87,6 +87,27 @@ services:
     networks:
       - order-network
 
+  
+  # Redis (cache/store)
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_CLIENT_PASSWORD}"]
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_CLIENT_PASSWORD=${REDIS_CLIENT_PASSWORD:-}
+    volumes:
+      - redis-data:/data
+    networks:
+      - order-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_CLIENT_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # API Gateway
   api-gateway:
     build:
@@ -133,7 +154,33 @@ services:
     networks:
       - order-network
 
+  # Payment Service
+  payment-svc:
+    build:
+      context: .
+      dockerfile: deployments/payment/Dockerfile
+    container_name: payment-svc
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      - KAFKA_BROKERS
+      - REDIS_CLIENT_ADDRESS
+      - REDIS_CLIENT_PASSWORD
+      - REDIS_CLIENT_TTL
+    env_file:
+      - .env
+    networks:
+      - order-network
+
 networks:
   order-network:
     name: order-network
     driver: bridge
+
+volumes:
+  redis-data:

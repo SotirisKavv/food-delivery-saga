@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -40,16 +41,23 @@ func NewRedisCache[T any](ctx context.Context, redisConf RedisConfig, ttl time.D
 
 func (r RedisCache[T]) Load(ctx context.Context, id string) (T, error) {
 	var zero, value T
-	err := r.Client.Get(ctx, id).Scan(&value)
+	data, err := r.Client.Get(ctx, id).Bytes()
 	if err != nil {
 		return zero, fmt.Errorf("Error loading resource: %w", err)
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return zero, fmt.Errorf("Error decoding resource: %w", err)
 	}
 	return value, nil
 }
 
 func (r RedisCache[T]) Save(ctx context.Context, entity T) error {
 	id := r.IDFn(entity)
-	if err := r.Client.Set(ctx, id, entity, r.TTL).Err(); err != nil {
+	data, err := json.Marshal(entity)
+	if err != nil {
+		return fmt.Errorf("Error encoding resource: %w", err)
+	}
+	if err := r.Client.Set(ctx, id, data, r.TTL).Err(); err != nil {
 		return fmt.Errorf("Error saving resource: %w", err)
 	}
 	return nil
@@ -61,7 +69,11 @@ func (r RedisCache[T]) Update(ctx context.Context, entity T) error {
 		return fmt.Errorf("Failed to find resource with key %s: %w", id, err)
 	}
 
-	if err := r.Client.Set(ctx, id, entity, r.TTL).Err(); err != nil {
+	data, err := json.Marshal(entity)
+	if err != nil {
+		return fmt.Errorf("Error encoding resource: %w", err)
+	}
+	if err := r.Client.Set(ctx, id, data, r.TTL).Err(); err != nil {
 		return fmt.Errorf("Error saving resource: %w", err)
 	}
 	return nil

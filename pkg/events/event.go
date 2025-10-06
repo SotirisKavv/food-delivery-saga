@@ -60,3 +60,16 @@ type EventItemsProcessed struct {
 }
 
 func (ip EventItemsProcessed) GetMetadata() Metadata { return ip.Metadata }
+
+// payment-authorized/-voided
+type EventPaymentProcessed struct {
+	Metadata      Metadata               `json:"mtdt"`
+	ItemsReserved map[string]models.Item `json:"items_reserved"`
+	TransactionID string                 `json:"transaction_id"`
+	Amount        int64                  `json:"amount"`
+	Currency      string                 `json:"currency"`
+	Reason        string                 `json:"reason"`
+	Success       bool                   `json:"success"`
+}
+
+func (pp EventPaymentProcessed) GetMetadata() Metadata { return pp.Metadata }

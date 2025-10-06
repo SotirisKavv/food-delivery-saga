@@ -49,13 +49,20 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		Items:           req.Items,
 	}
 
-	inventoryMessage := kafka.EventMessage{
-		Topic: kafka.TopicOrder,
-		Key:   orderEvent.Metadata.OrderId,
-		Event: orderEvent,
+	eventMessages := []kafka.EventMessage{
+		{
+			Topic: kafka.TopicOrder,
+			Key:   orderEvent.Metadata.OrderId,
+			Event: orderEvent,
+		},
+		{
+			Topic: kafka.TopicInventory,
+			Key:   orderEvent.Metadata.OrderId,
+			Event: orderEvent,
+		},
 	}
 
-	if err := h.Producer.PublishEvent(c, inventoryMessage); err != nil {
+	if err := h.Producer.PublishMultipleEvents(c, eventMessages); err != nil {
 		log.Printf("Failed to publish message: %v", err)
 		utils.SendInternalError(c, "Failed to process order")
 		return
