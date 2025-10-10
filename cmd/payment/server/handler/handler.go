@@ -89,11 +89,10 @@ func (h *Handler) PublishPaymentFailed(ctx context.Context, evt events.EventItem
 			CorrelationId: evt.Metadata.CorrelationId,
 			CausationId:   evt.Metadata.MessageId,
 			Timestamp:     time.Now().UTC(),
-			Producer:      "payment-svc",
+			Producer:      events.ProducerPaymentSvc,
 		},
-		ItemsReserved: evt.ItemsReserved,
-		Reason:        reason,
-		Success:       false,
+		Reason:  reason,
+		Success: false,
 	}
 
 	message := kafka.EventMessage{
@@ -114,11 +113,10 @@ func (h *Handler) PublishPaymentAuthorized(ctx context.Context, result models.Pa
 			CorrelationId: evt.Metadata.CorrelationId,
 			CausationId:   evt.Metadata.MessageId,
 			Timestamp:     time.Now().UTC(),
-			Producer:      "payment-svc",
+			Producer:      events.ProducerPaymentSvc,
 		},
-		ItemsReserved: evt.ItemsReserved,
 		TransactionID: result.TransactionID,
-		Amount:        result.Amount,
+		AmountCents:   result.Amount,
 		Currency:      result.Currency,
 		Success:       true,
 	}

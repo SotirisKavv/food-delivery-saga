@@ -3,6 +3,7 @@ package events
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 type TypedHandler func(raw []byte) error
@@ -23,6 +24,7 @@ func Register[T DomainEvent](d *Dispatcher, et EventType, handler func(T) error)
 		}
 		return handler(evt)
 	}
+	log.Printf("[DISPATCHER] Registered handler for %s", string(et))
 }
 
 type EventEnvelope struct {
@@ -35,6 +37,7 @@ func (d *Dispatcher) Dispatch(raw []byte) error {
 		return fmt.Errorf("Failed to unmarshal value: %w", err)
 	}
 
+	log.Printf("[DISPATCHER] Handling %+v", env)
 	handler, ok := d.Handlers[env.Metadata.Type]
 	if !ok {
 		return fmt.Errorf("No handler found for %s", env.Metadata.Type)

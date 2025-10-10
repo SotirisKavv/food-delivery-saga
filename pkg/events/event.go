@@ -16,11 +16,16 @@ const (
 	EvtTypePaymentAuthorized      EventType = "PAYMENT_AUTHORIZED"
 	EvtTypePaymentVoided          EventType = "PAYMENT_VOIDED"
 	EvtTypePaymentCaptured        EventType = "PAYMENT_CAPTURED"
-	EvtTypeRestaurantAccepted     EventType = "RESTUARANT_ACCEPTED"
-	EvtTypeRestaurantReady        EventType = "RESTUARANT_READY"
-	EvtTypeCourierAssigned        EventType = "COURIER_ASSIGNED"
-	EvtTypeCourierPickedUp        EventType = "COURIER_PICKED_UP"
-	EvtTypeCourierDelivered       EventType = "COURIER_DELIVERED"
+	EvtTypeRestaurantAccepted     EventType = "RESTAURANT_ACCEPTED"
+	EvtTypeRestaurantRejected     EventType = "RESTAURANT_REJECTED"
+	EvtTypeRestaurantReady        EventType = "RESTAURANT_READY"
+)
+
+const (
+	ProducerOrderSvc      string = "order-svc"
+	ProducerInventorySvc  string = "inventory-svc"
+	ProducerPaymentSvc    string = "payment-svc"
+	ProducerRestaurantSvc string = "restaurant-svc"
 )
 
 type Metadata struct {
@@ -63,13 +68,24 @@ func (ip EventItemsProcessed) GetMetadata() Metadata { return ip.Metadata }
 
 // payment-authorized/-voided
 type EventPaymentProcessed struct {
-	Metadata      Metadata               `json:"mtdt"`
-	ItemsReserved map[string]models.Item `json:"items_reserved"`
-	TransactionID string                 `json:"transaction_id"`
-	Amount        int64                  `json:"amount"`
-	Currency      string                 `json:"currency"`
-	Reason        string                 `json:"reason"`
-	Success       bool                   `json:"success"`
+	Metadata      Metadata `json:"mtdt"`
+	ReservationId string   `json:"reservation_id"`
+	TransactionID string   `json:"transaction_id"`
+	AmountCents   int64    `json:"amount_cents"`
+	Currency      string   `json:"currency"`
+	Reason        string   `json:"reason"`
+	Success       bool     `json:"success"`
 }
 
 func (pp EventPaymentProcessed) GetMetadata() Metadata { return pp.Metadata }
+
+// restaurant-accepted/-rejected/-completed
+type EventRestaurantProcessed struct {
+	Metadata      Metadata `json:"mtdt"`
+	ETAMinutes    int64    `json:"eta_min"`
+	TransactionID string   `json:"transaction_id"`
+	Reason        string   `json:"reason"`
+	Success       bool     `json:"success"`
+}
+
+func (rp EventRestaurantProcessed) GetMetadata() Metadata { return rp.Metadata }

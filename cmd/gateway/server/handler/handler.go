@@ -39,7 +39,7 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 			OrderId:       uuid.NewString(),
 			CorrelationId: uuid.NewString(),
 			Timestamp:     time.Now().UTC(),
-			Producer:      "api-gateway",
+			Producer:      events.ProducerOrderSvc,
 		},
 		CustomerId:      req.CustomerId,
 		PaymentMethodId: req.PaymentMethodId,

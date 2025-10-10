@@ -56,6 +56,8 @@ func (m *MockPaymentProcessor) ProcessPayment(ctx context.Context, details model
 
 		return models.PaymentResult{
 			Success:       false,
+			CustomerId:    details.CustomerId,
+			OrderId:       details.OrderId,
 			FailureReason: reason,
 		}, nil
 	}
@@ -65,6 +67,8 @@ func (m *MockPaymentProcessor) ProcessPayment(ctx context.Context, details model
 
 	return models.PaymentResult{
 		Success:       true,
+		OrderId:       details.OrderId,
+		CustomerId:    details.CustomerId,
 		TransactionID: transactionID,
 		Amount:        details.Amount,
 		Currency:      details.Currency,

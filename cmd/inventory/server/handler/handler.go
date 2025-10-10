@@ -16,7 +16,8 @@ import (
 type Handler struct {
 	Dispatcher *events.Dispatcher
 	Producer   *kafka.Producer
-	Repository repository.Repository[models.Restaurant]
+	ReservRepo repository.Repository[models.ItemReservation]
+	RestoRepo  repository.Repository[models.Restaurant]
 }
 
 func NewHandler(producer *kafka.Producer) *Handler {
@@ -24,15 +25,20 @@ func NewHandler(producer *kafka.Producer) *Handler {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	repo, _ := repository.NewRepository(ctx, repository.RepositoryMemory, func(r models.Restaurant) string {
+	itemResRepo, _ := repository.NewRepository(ctx, repository.RepositoryMemory, func(ir models.ItemReservation) string {
+		return ir.OrderId
+	})
+
+	restoRepo, _ := repository.NewRepository(ctx, repository.RepositoryMemory, func(r models.Restaurant) string {
 		return r.RestaurantId
 	})
 
-	_ = seedInventory(ctx, repo)
+	_ = seedInventory(ctx, restoRepo)
 	h := &Handler{
 		Producer:   producer,
 		Dispatcher: dispatcher,
-		Repository: repo,
+		RestoRepo:  restoRepo,
+		ReservRepo: itemResRepo,
 	}
 	events.Register(dispatcher, events.EvtTypeOrderPlaced, h.OnOrderPlaced)
 	return h
@@ -46,8 +52,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	log.Printf("Processing %+v", evt)
-	inventory, err := h.Repository.Load(ctx, evt.RestaurantId)
+	inventory, err := h.RestoRepo.Load(ctx, evt.RestaurantId)
 	if err != nil {
 		return fmt.Errorf("Failed to Load resource with id %s: %w", evt.RestaurantId, err)
 	}
@@ -75,10 +80,21 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 		inventory.Items[id] = dish
 	}
 
-	if err := h.Repository.Update(ctx, inventory); err != nil {
+	if err := h.RestoRepo.Update(ctx, inventory); err != nil {
 		return fmt.Errorf("Failed to update inventory: %w", err)
 	}
 	log.Printf("Current Inventory after update: %+v", inventory)
+
+	reservation := models.ItemReservation{
+		OrderId:       evt.Metadata.OrderId,
+		RestaurantId:  evt.RestaurantId,
+		CustomerId:    evt.CustomerId,
+		ReservedItems: evt.Items,
+	}
+
+	if err := h.ReservRepo.Save(ctx, reservation); err != nil {
+		return fmt.Errorf("Failed to save reservation: %w", err)
+	}
 
 	return h.PublishItemsReserved(evt)
 
@@ -93,7 +109,7 @@ func (h *Handler) PublishItemsReservationFailed(evt events.EventOrderPlaced, rea
 			CorrelationId: evt.Metadata.CorrelationId,
 			CausationId:   evt.Metadata.MessageId,
 			Timestamp:     time.Now().UTC(),
-			Producer:      "inventory-svc",
+			Producer:      events.ProducerInventorySvc,
 		},
 		RestaurantId: evt.RestaurantId,
 		Reason:       reason,
@@ -118,20 +134,28 @@ func (h *Handler) PublishItemsReserved(evt events.EventOrderPlaced) error {
 			CorrelationId: evt.Metadata.CorrelationId,
 			CausationId:   evt.Metadata.MessageId,
 			Timestamp:     time.Now().UTC(),
-			Producer:      "inventory-svc",
+			Producer:      events.ProducerInventorySvc,
 		},
 		RestaurantId:  evt.RestaurantId,
 		ItemsReserved: evt.Items,
 		Success:       true,
 	}
 
-	kafkaMessage := kafka.EventMessage{
+	inventoryMessage := kafka.EventMessage{
 		Key:   itemsReserved.Metadata.OrderId,
 		Topic: kafka.TopicInventory,
 		Event: itemsReserved,
 	}
+	paymentMessage := kafka.EventMessage{
+		Key:   itemsReserved.Metadata.OrderId,
+		Topic: kafka.TopicPayment,
+		Event: itemsReserved,
+	}
 
-	return h.Producer.PublishEvent(context.Background(), kafkaMessage)
+	return h.Producer.PublishMultipleEvents(context.Background(), []kafka.EventMessage{
+		inventoryMessage,
+		paymentMessage,
+	})
 }
 
 func seedInventory(ctx context.Context, repo repository.Repository[models.Restaurant]) error {

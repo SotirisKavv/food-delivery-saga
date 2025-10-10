@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 type OrderStatus string
 
 const (
@@ -7,21 +9,18 @@ const (
 	ORDER_STATUS_RESERVED   OrderStatus = "RESERVED"
 	ORDER_STATUS_AUTHORIZED OrderStatus = "AUTHORIZED"
 	ORDER_STATUS_ACCEPTED   OrderStatus = "ACCEPTED"
-	ORDER_STATUS_DISPATCHED OrderStatus = "DISPATCHED"
-	ORDER_STATUS_IN_TRANSIT OrderStatus = "IN_TRANSIT"
-	ORDER_STATUS_DELIVERED  OrderStatus = "DELIVERED"
-	ORDER_STATUS_CAPTURED   OrderStatus = "CAPTURED"
 	ORDER_STATUS_COMPLETED  OrderStatus = "COMPLETED"
 	ORDER_STATUS_CANCELED   OrderStatus = "CANCELED"
 )
 
 type Item struct {
-	SKU      string `json:"sku"`
+	SKU      string `json:"sku"` //	Primary Key
 	Quantity int64  `json:"quantity"`
+	PrepTime int64  `json:"prep_time"`
 }
 
 type Order struct {
-	OrderId         string          `json:"order_id"`
+	OrderId         string          `json:"order_id"` //	Primary Key
 	CustomerId      string          `json:"customer_id"`
 	RestaurantId    string          `json:"restaurant_id"`
 	Items           map[string]Item `json:"items"`
@@ -47,13 +46,15 @@ type OrderResponse struct {
 	CorrelationID string `json:"correlation_id"`
 }
 
-type Restaurant struct {
-	RestaurantId string          `json:"restaurant_id"`
-	Items        map[string]Item `json:"items"`
+type ItemReservation struct {
+	OrderId       string          `json:"order_id"` //	Primary Key
+	CustomerId    string          `json:"customer_id"`
+	RestaurantId  string          `json:"restaurant_id"`
+	ReservedItems map[string]Item `json:"reserved_items"`
 }
 
 type PaymentDetails struct {
-	OrderId         string `json:"order_id"`
+	OrderId         string `json:"order_id"` //	Primary Key
 	CustomerId      string `json:"customer_id"`
 	Amount          int64  `json:"amount"`
 	Currency        string `json:"currency"`
@@ -62,8 +63,26 @@ type PaymentDetails struct {
 
 type PaymentResult struct {
 	Success       bool   `json:"success"`
+	OrderId       string `json:"order_id"`
+	CustomerId    string `json:"customer_id"`
 	TransactionID string `json:"transaction_id"`
 	Amount        int64  `json:"amount"`
 	Currency      string `json:"currency"`
 	FailureReason string `json:"reason"`
+}
+
+type Restaurant struct {
+	RestaurantId          string          `json:"restaurant_id"` //	Primary Key
+	CapacityMax           int64           `json:"max_capacity"`
+	CurrentLoad           int64           `json:"curr_load"`
+	ParallelizationFactor int64           `json:"parallelization_factor"`
+	Items                 map[string]Item `json:"items"`
+}
+
+type Ticket struct {
+	OrderId      string          `json:"order_id"` //	Primary Key
+	RestaurantId string          `json:"restaurant_id"`
+	Items        map[string]Item `json:"items"`
+	ETAminutes   time.Duration   `json:"eta_minutes"`
+	AcceptedAt   time.Time       `json:"accepted_at"`
 }

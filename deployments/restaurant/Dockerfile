@@ -1,0 +1,29 @@
+FROM golang:1.23.9-alpine AS builder
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -o restaurant ./cmd/restaurant
+
+# Final stage
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y ca-certificates wget && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /root/
+
+# Copy the binary from builder
+COPY --from=builder /app/restaurant .
+
+# Expose port
+EXPOSE 8080
+
+# Run the binary
+CMD ["./restaurant"]
