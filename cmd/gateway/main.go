@@ -29,7 +29,17 @@ func main() {
 		Brokers: brokers,
 	}
 
-	server := server.NewServer(sConf, prodConf)
+	consConf := kafka.ConsumerConfig{
+		Brokers: brokers,
+		Topics: []string{
+			kafka.TopicInventory,
+			kafka.TopicPayment,
+			kafka.TopicRestaurant,
+		},
+		GroupId: "order-gateway",
+	}
+
+	server := server.NewServer(sConf, prodConf, consConf)
 
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)

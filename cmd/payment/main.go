@@ -21,7 +21,11 @@ func main() {
 
 	consConf := kafka.ConsumerConfig{
 		Brokers: brokers,
-		Topics:  []string{kafka.TopicInventory, kafka.TopicOrder},
+		Topics: []string{
+			kafka.TopicOrder,      //OrderPlaced
+			kafka.TopicInventory,  //ItemsReserved
+			kafka.TopicRestaurant, //RestaurantRejected
+		},
 		GroupId: "payment-svc",
 	}
 

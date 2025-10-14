@@ -1,30 +1,29 @@
 package handler
 
 import (
-	"food-delivery-saga/pkg/events"
+	"context"
+	"fmt"
+	"food-delivery-saga/cmd/gateway/server/service"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
 	"food-delivery-saga/pkg/utils"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 type Handler struct {
-	Producer *kafka.Producer
+	OrderService *service.Service
 }
 
-func NewHandler(producer *kafka.Producer) *Handler {
+func NewHandler(service *service.Service) *Handler {
 	return &Handler{
-		Producer: producer,
+		OrderService: service,
 	}
 }
 
 func (h *Handler) CreateOrder(c *gin.Context) {
-
 	var req models.OrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("Invalid request format: %v", err)
@@ -32,47 +31,10 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	orderEvent := events.EventOrderPlaced{
-		Metadata: events.Metadata{
-			MessageId:     uuid.NewString(),
-			Type:          events.EvtTypeOrderPlaced,
-			OrderId:       uuid.NewString(),
-			CorrelationId: uuid.NewString(),
-			Timestamp:     time.Now().UTC(),
-			Producer:      events.ProducerOrderSvc,
-		},
-		CustomerId:      req.CustomerId,
-		PaymentMethodId: req.PaymentMethodId,
-		AmountCents:     req.Amount,
-		Currency:        req.Currency,
-		RestaurantId:    req.RestaurantId,
-		Items:           req.Items,
-	}
-
-	eventMessages := []kafka.EventMessage{
-		{
-			Topic: kafka.TopicOrder,
-			Key:   orderEvent.Metadata.OrderId,
-			Event: orderEvent,
-		},
-		{
-			Topic: kafka.TopicInventory,
-			Key:   orderEvent.Metadata.OrderId,
-			Event: orderEvent,
-		},
-	}
-
-	if err := h.Producer.PublishMultipleEvents(c, eventMessages); err != nil {
-		log.Printf("Failed to publish message: %v", err)
-		utils.SendInternalError(c, "Failed to process order")
+	response, err := h.OrderService.CreateOrder(c, &req)
+	if err != nil {
+		utils.SendInternalError(c, fmt.Sprintf("Failed to create Order: %+v", err))
 		return
-	}
-
-	response := models.OrderResponse{
-		OrderId:       orderEvent.Metadata.OrderId,
-		Status:        string(models.ORDER_STATUS_PENDING),
-		Message:       "Order received and being processed",
-		CorrelationID: orderEvent.Metadata.CorrelationId,
 	}
 
 	log.Printf("Order placed successfully: %s", response.OrderId)
@@ -82,10 +44,10 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 func (h *Handler) GetOrder(c *gin.Context) {
 	id := c.Param("id")
 
-	response := models.OrderResponse{
-		OrderId: id,
-		Status:  string(models.ORDER_STATUS_PENDING),
-		Message: "Order retrieved",
+	response, err := h.OrderService.GetOrder(c, id)
+	if err != nil {
+		utils.SendInternalError(c, fmt.Sprintf("Failed to retrive Order %s: %+v", id, err))
+		return
 	}
 
 	utils.SendSuccess(c, http.StatusOK, response.Message, response)
@@ -97,4 +59,8 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 		"service": "api-gateway",
 	}
 	utils.SendSuccess(c, http.StatusOK, "Service is Healthy", health)
+}
+
+func (h *Handler) HandleMessages(ctx context.Context, eventMessage kafka.KafkaMessage) error {
+	return h.OrderService.Dispatcher.Dispatch(eventMessage.Value)
 }

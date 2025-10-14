@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
@@ -41,6 +42,8 @@ func NewHandler(producer *kafka.Producer) *Handler {
 		ReservRepo: itemResRepo,
 	}
 	events.Register(dispatcher, events.EvtTypeOrderPlaced, h.OnOrderPlaced)
+	events.Register(dispatcher, events.EvtTypePaymentFailed, h.OnPaymentFailed)
+	events.Register(dispatcher, events.EvtTypeRestaurantRejected, h.OnRestaurantRejected)
 	return h
 }
 
@@ -54,7 +57,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 
 	inventory, err := h.RestoRepo.Load(ctx, evt.RestaurantId)
 	if err != nil {
-		return fmt.Errorf("Failed to Load resource with id %s: %w", evt.RestaurantId, err)
+		return fmt.Errorf("Failed to load Restaurant with id %s: %+v", evt.RestaurantId, err)
 	}
 
 	for id, item := range evt.Items {
@@ -81,7 +84,8 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	}
 
 	if err := h.RestoRepo.Update(ctx, inventory); err != nil {
-		return fmt.Errorf("Failed to update inventory: %w", err)
+		failureReason := fmt.Sprintf("Failed to update inventory: %+v", err)
+		return h.PublishItemsReservationFailed(evt, failureReason)
 	}
 	log.Printf("Current Inventory after update: %+v", inventory)
 
@@ -93,10 +97,64 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	}
 
 	if err := h.ReservRepo.Save(ctx, reservation); err != nil {
-		return fmt.Errorf("Failed to save reservation: %w", err)
+		failureReason := fmt.Sprintf("Failed to save reservation: %+v", err)
+		return h.PublishItemsReservationFailed(evt, failureReason)
 	}
 
 	return h.PublishItemsReserved(evt)
+
+}
+
+func (h *Handler) OnPaymentFailed(evt events.EventPaymentProcessed) error {
+	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+
+	if failureReason := h.HandleServiceFailure(ctx, evt.Metadata.OrderId); failureReason != "" {
+		payload, _ := json.Marshal(evt)
+		return h.PublishToDLQ(ctx, evt.Metadata, payload, failureReason)
+	}
+	return nil
+}
+
+func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) error {
+	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+
+	if failureReason := h.HandleServiceFailure(ctx, evt.Metadata.OrderId); failureReason != "" {
+		payload, _ := json.Marshal(evt)
+		return h.PublishToDLQ(ctx, evt.Metadata, payload, failureReason)
+	}
+	return nil
+}
+
+func (h *Handler) HandleServiceFailure(ctx context.Context, orderId string) string {
+	reservation, err := h.ReservRepo.Load(ctx, orderId)
+	if err != nil {
+		return fmt.Sprintf("Failed to save reservation: %+v", err)
+	}
+
+	inventory, err := h.RestoRepo.Load(ctx, reservation.RestaurantId)
+	if err != nil {
+		return fmt.Sprintf("Failed to load Restaurant with id %s: %+v", reservation.RestaurantId, err)
+	}
+
+	for id, item := range reservation.ReservedItems {
+		dish, ok := inventory.Items[id]
+		if !ok {
+			failureReason := fmt.Sprintf("Item %s not available in Restaurant %s", id, reservation.RestaurantId)
+			log.Printf(failureReason)
+			return failureReason
+		}
+		dish.Quantity += item.Quantity
+		inventory.Items[id] = dish
+	}
+
+	if err := h.RestoRepo.Update(ctx, inventory); err != nil {
+		return fmt.Sprintf("Failed to update Inventory: %+v", err)
+	}
+	log.Printf("Current Inventory after update: %+v", inventory)
+
+	return ""
 
 }
 
@@ -118,7 +176,7 @@ func (h *Handler) PublishItemsReservationFailed(evt events.EventOrderPlaced, rea
 
 	kafkaMessage := kafka.EventMessage{
 		Key:   reservationFailed.Metadata.OrderId,
-		Topic: kafka.TopicOrder,
+		Topic: kafka.TopicInventory,
 		Event: reservationFailed,
 	}
 
@@ -141,21 +199,41 @@ func (h *Handler) PublishItemsReserved(evt events.EventOrderPlaced) error {
 		Success:       true,
 	}
 
-	inventoryMessage := kafka.EventMessage{
+	kafkaMessage := kafka.EventMessage{
 		Key:   itemsReserved.Metadata.OrderId,
 		Topic: kafka.TopicInventory,
 		Event: itemsReserved,
 	}
-	paymentMessage := kafka.EventMessage{
-		Key:   itemsReserved.Metadata.OrderId,
-		Topic: kafka.TopicPayment,
-		Event: itemsReserved,
+
+	return h.Producer.PublishEvent(context.Background(), kafkaMessage)
+}
+
+func (h *Handler) PublishToDLQ(ctx context.Context, mtdt events.Metadata, payload []byte, reason string) error {
+	dlqError := events.EventDLQ{
+		Metadata: events.Metadata{
+			MessageId:     uuid.NewString(),
+			CausationId:   mtdt.MessageId,
+			CorrelationId: mtdt.CorrelationId,
+			Type:          events.EvtTypeDeadLetterQueue,
+			OrderId:       mtdt.OrderId,
+			Timestamp:     time.Now(),
+			Producer:      events.ProducerPaymentSvc,
+		},
+		ErrorDetails: events.ErrorDetails{
+			Message:   reason,
+			Service:   events.ProducerPaymentSvc,
+			OccuredAt: time.Now(),
+		},
+		Payload: payload,
 	}
 
-	return h.Producer.PublishMultipleEvents(context.Background(), []kafka.EventMessage{
-		inventoryMessage,
-		paymentMessage,
-	})
+	message := kafka.EventMessage{
+		Key:   dlqError.Metadata.OrderId,
+		Topic: kafka.TopicDeadLetterQueue,
+		Event: dlqError,
+	}
+
+	return h.Producer.PublishEvent(ctx, message)
 }
 
 func seedInventory(ctx context.Context, repo repository.Repository[models.Restaurant]) error {

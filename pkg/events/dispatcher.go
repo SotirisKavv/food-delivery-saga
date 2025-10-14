@@ -37,10 +37,11 @@ func (d *Dispatcher) Dispatch(raw []byte) error {
 		return fmt.Errorf("Failed to unmarshal value: %w", err)
 	}
 
-	log.Printf("[DISPATCHER] Handling %+v", env)
+	log.Printf("[DISPATCHER] Handling order=%s type=%s producer=%s", env.Metadata.OrderId, env.Metadata.Type, env.Metadata.Producer)
 	handler, ok := d.Handlers[env.Metadata.Type]
 	if !ok {
-		return fmt.Errorf("No handler found for %s", env.Metadata.Type)
+		log.Printf("[DISPATCHER] No handler found for %s", env.Metadata.Type)
+		return nil
 	}
 
 	return handler(raw)

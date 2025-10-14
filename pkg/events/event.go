@@ -14,11 +14,11 @@ const (
 	EvtTypeItemsReservationFailed EventType = "ITEMS_RESERVATION_FAILED"
 	EvtTypeItemsReleased          EventType = "ITEMS_RELEASED"
 	EvtTypePaymentAuthorized      EventType = "PAYMENT_AUTHORIZED"
-	EvtTypePaymentVoided          EventType = "PAYMENT_VOIDED"
-	EvtTypePaymentCaptured        EventType = "PAYMENT_CAPTURED"
+	EvtTypePaymentFailed          EventType = "PAYMENT_FAILED"
 	EvtTypeRestaurantAccepted     EventType = "RESTAURANT_ACCEPTED"
 	EvtTypeRestaurantRejected     EventType = "RESTAURANT_REJECTED"
 	EvtTypeRestaurantReady        EventType = "RESTAURANT_READY"
+	EvtTypeDeadLetterQueue        EventType = "DEAD_LETTER_QUEUE"
 )
 
 const (
@@ -36,6 +36,12 @@ type Metadata struct {
 	CausationId   string    `json:"causation_id"`
 	Timestamp     time.Time `json:"timestamp"`
 	Producer      string    `json:"producer"`
+}
+
+type ErrorDetails struct {
+	Message   string
+	Service   string
+	OccuredAt time.Time
 }
 
 type DomainEvent interface {
@@ -89,3 +95,12 @@ type EventRestaurantProcessed struct {
 }
 
 func (rp EventRestaurantProcessed) GetMetadata() Metadata { return rp.Metadata }
+
+// Dead Letter Queue
+type EventDLQ struct {
+	Metadata     Metadata     `json:"mtdt"`
+	ErrorDetails ErrorDetails `json:"error"`
+	Payload      []byte       `json:"payload"`
+}
+
+func (dlq EventDLQ) GetMetadata() Metadata { return dlq.Metadata }

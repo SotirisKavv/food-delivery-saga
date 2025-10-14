@@ -25,7 +25,7 @@ type Handler struct {
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
 	ticketRepo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(r models.Ticket) string {
-		return r.OrderId
+		return ticketKeyPrefix + r.OrderId
 	})
 	restoRepo, _ := repository.NewRepository(context.Background(), repository.RepositoryMemory, func(r models.Restaurant) string {
 		return r.RestaurantId
@@ -47,6 +47,8 @@ func NewHandler(producer *kafka.Producer) *Handler {
 	return h
 }
 
+const ticketKeyPrefix = "ticket:"
+
 func (h *Handler) HandleMessage(ctx context.Context, message kafka.KafkaMessage) error {
 	return h.Dispatcher.Dispatch(message.Value)
 }
@@ -55,6 +57,12 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
+	log.Printf("[HANDLER] %s order=%s, restoID=%s, items=%+v",
+		evt.Metadata.Type,
+		evt.Metadata.OrderId,
+		evt.RestaurantId,
+		evt.ItemsReserved,
+	)
 	ticket := models.Ticket{
 		OrderId:      evt.Metadata.OrderId,
 		RestaurantId: evt.RestaurantId,
@@ -74,11 +82,11 @@ func (h *Handler) OnPaymentAuthorized(evt events.EventPaymentProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	ticket, err := h.TicketRepo.Load(ctx, evt.Metadata.OrderId)
+	ticket, err := h.TicketRepo.Load(ctx, ticketKeyPrefix+evt.Metadata.OrderId)
 	if err != nil {
 		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to retrieve ticket: %+v", err))
 	}
-	log.Printf("[HANDLER] Ticket retrieved: %v", ticket)
+	log.Printf("[HANDLER] Ticket retrieved: orderId=%s, restoId=%s", ticket.OrderId, ticket.RestaurantId)
 
 	if ticket.RestaurantId == "" {
 		return h.PublishRestaurantRejected(ctx, evt, "Ticket is missing restaurant_id")
@@ -121,9 +129,17 @@ func (h *Handler) OnPaymentAuthorized(evt events.EventPaymentProcessed) error {
 func (h *Handler) CheckForReadyTickets(ctx context.Context) error {
 	for item := range h.TicketScheduler.Out {
 		ticket := item.Value
+		restaurant, err := h.RestoRepo.Load(ctx, ticket.RestaurantId)
+		if err != nil {
+			return fmt.Errorf("Failed to retrieve restaurant (id=%s): %w", ticket.RestaurantId, err)
+		}
+		restaurant.CurrentLoad -= int64(ticket.ETAminutes.Seconds())
+		if err := h.RestoRepo.Update(ctx, restaurant); err != nil {
+			return fmt.Errorf("Failed to update restaurant (id=%s): %w", ticket.RestaurantId, err)
+		}
 		log.Printf("[HANDLER] Ticket ready: order_id=%s", ticket.OrderId)
 		if err := h.PublishRestaurantReady(ctx, ticket); err != nil {
-			log.Printf("Failed to pop ticket out of the scheduler: %v", err)
+			log.Printf("[HANDLER] Failed to pop ticket out of the scheduler: %v", err)
 		}
 	}
 	return nil

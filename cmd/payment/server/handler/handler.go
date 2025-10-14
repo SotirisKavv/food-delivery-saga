@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	paymentprocessor "food-delivery-saga/cmd/payment/server/payment-processor"
 	"food-delivery-saga/pkg/events"
@@ -20,11 +21,13 @@ type Handler struct {
 	Processor  paymentprocessor.Processor
 }
 
+const paymentKeyPrefix = "payment:"
+
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
 	paymentProcessor, _ := paymentprocessor.NewProcessor(paymentprocessor.ProcessorMock)
 	repo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(pd models.PaymentDetails) string {
-		return pd.OrderId
+		return paymentKeyPrefix + pd.OrderId
 	})
 
 	h := &Handler{
@@ -36,6 +39,7 @@ func NewHandler(producer *kafka.Producer) *Handler {
 
 	events.Register(h.Dispatcher, events.EvtTypeOrderPlaced, h.OnOrderPlaced)
 	events.Register(h.Dispatcher, events.EvtTypeItemsReserved, h.OnItemsReserved)
+	events.Register(h.Dispatcher, events.EvtTypeRestaurantRejected, h.OnRestaurantRejected)
 
 	return h
 }
@@ -67,7 +71,7 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	details, err := h.Repository.Load(ctx, evt.Metadata.OrderId)
+	details, err := h.Repository.Load(ctx, paymentKeyPrefix+evt.Metadata.OrderId)
 	if err != nil {
 		return h.PublishPaymentFailed(ctx, evt, fmt.Sprintf("Failed to retrieve payment details: %+v", err))
 	}
@@ -80,12 +84,29 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 	return h.PublishPaymentAuthorized(ctx, result, evt)
 }
 
+func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) error {
+	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+
+	details, err := h.Repository.Load(ctx, paymentKeyPrefix+evt.Metadata.OrderId)
+	if err != nil {
+		return h.PublishToDLQ(ctx, evt, fmt.Sprintf("Failed to retrieve payment details: %+v", err))
+	}
+
+	result, err := h.Processor.RevertPayemnt(ctx, details)
+	if err != nil || !result.Success {
+		return h.PublishToDLQ(ctx, evt, result.FailureReason)
+	}
+
+	return nil
+}
+
 func (h *Handler) PublishPaymentFailed(ctx context.Context, evt events.EventItemsProcessed, reason string) error {
 	paymentFailed := events.EventPaymentProcessed{
 		Metadata: events.Metadata{
 			OrderId:       evt.Metadata.OrderId,
 			MessageId:     uuid.NewString(),
-			Type:          events.EvtTypePaymentVoided,
+			Type:          events.EvtTypePaymentFailed,
 			CorrelationId: evt.Metadata.CorrelationId,
 			CausationId:   evt.Metadata.MessageId,
 			Timestamp:     time.Now().UTC(),
@@ -97,7 +118,7 @@ func (h *Handler) PublishPaymentFailed(ctx context.Context, evt events.EventItem
 
 	message := kafka.EventMessage{
 		Key:   paymentFailed.Metadata.OrderId,
-		Topic: kafka.TopicInventory,
+		Topic: kafka.TopicPayment,
 		Event: paymentFailed,
 	}
 
@@ -125,6 +146,40 @@ func (h *Handler) PublishPaymentAuthorized(ctx context.Context, result models.Pa
 		Key:   paymentAuthorized.Metadata.OrderId,
 		Topic: kafka.TopicPayment,
 		Event: paymentAuthorized,
+	}
+
+	return h.Producer.PublishEvent(ctx, message)
+}
+
+func (h *Handler) PublishToDLQ(ctx context.Context, evt events.EventRestaurantProcessed, reason string) error {
+
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		return fmt.Errorf("Failes to marshal event: %w", err)
+	}
+
+	dlqError := events.EventDLQ{
+		Metadata: events.Metadata{
+			MessageId:     uuid.NewString(),
+			CausationId:   evt.Metadata.MessageId,
+			CorrelationId: evt.Metadata.CorrelationId,
+			Type:          events.EvtTypeDeadLetterQueue,
+			OrderId:       evt.Metadata.OrderId,
+			Timestamp:     time.Now(),
+			Producer:      events.ProducerPaymentSvc,
+		},
+		ErrorDetails: events.ErrorDetails{
+			Message:   reason,
+			Service:   events.ProducerPaymentSvc,
+			OccuredAt: time.Now(),
+		},
+		Payload: payload,
+	}
+
+	message := kafka.EventMessage{
+		Key:   dlqError.Metadata.OrderId,
+		Topic: kafka.TopicDeadLetterQueue,
+		Event: dlqError,
 	}
 
 	return h.Producer.PublishEvent(ctx, message)

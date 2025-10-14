@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"food-delivery-saga/cmd/gateway/server/handler"
+	"food-delivery-saga/cmd/gateway/server/service"
 	"food-delivery-saga/pkg/kafka"
 	"log"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 type Server struct {
 	Config   ServerConfig
 	Producer *kafka.Producer
+	Consumer *kafka.Consumer
 	Handler  *handler.Handler
 	Router   *gin.Engine
 }
@@ -29,13 +31,17 @@ type ServerConfig struct {
 	IdleTimeout  time.Duration
 }
 
-func NewServer(conf ServerConfig, prodConf kafka.ProducerConfig) *Server {
+func NewServer(conf ServerConfig, prodConf kafka.ProducerConfig, consConf kafka.ConsumerConfig) *Server {
 	producer := kafka.NewProducer(prodConf)
-	orderHandler := handler.NewHandler(producer)
+	orderService := service.NewService(producer)
+	orderHandler := handler.NewHandler(orderService)
+
+	consumer := kafka.NewConsumer(consConf)
 
 	server := &Server{
 		Config:   conf,
 		Producer: producer,
+		Consumer: consumer,
 		Handler:  orderHandler,
 	}
 
@@ -84,6 +90,12 @@ func (s *Server) Start() error {
 		}
 	}()
 
+	go func() {
+		if err := s.Consumer.ConsumeWithRetry(context.Background(), s.Handler.HandleMessages, 3); err != nil {
+			log.Printf("Failed to consume message: %+v", err)
+		}
+	}()
+
 	return s.HandleShutdown(srv)
 }
 
@@ -102,6 +114,10 @@ func (s *Server) HandleShutdown(srv *http.Server) error {
 	}
 
 	if err := s.Producer.Close(); err != nil {
+		log.Printf("Failed to close kafka Producer: %v", err)
+		return err
+	}
+	if err := s.Consumer.Close(); err != nil {
 		log.Printf("Failed to close kafka Producer: %v", err)
 		return err
 	}

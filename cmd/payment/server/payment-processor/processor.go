@@ -8,6 +8,7 @@ import (
 
 type Processor interface {
 	ProcessPayment(ctx context.Context, details models.PaymentDetails) (models.PaymentResult, error)
+	RevertPayemnt(ctx context.Context, details models.PaymentDetails) (models.PaymentResult, error)
 }
 
 type ProcessorType string

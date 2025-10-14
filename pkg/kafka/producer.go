@@ -79,13 +79,6 @@ func (p *Producer) PublishMultipleEvents(ctx context.Context, events []EventMess
 	return nil
 }
 
-// EventMessage represents an event to be published to a specific topic
-type EventMessage struct {
-	Topic string
-	Key   string
-	Event any
-}
-
 func (p *Producer) Close() error {
 	return p.Writer.Close()
 }

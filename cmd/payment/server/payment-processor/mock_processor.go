@@ -52,7 +52,7 @@ func (m *MockPaymentProcessor) ProcessPayment(ctx context.Context, details model
 
 	if random < float32(m.FailureRate) {
 		reason := reasons[rand.Intn(len(reasons))]
-		log.Printf("[MOCK] Payment FAILED for booking %s: %s", details.OrderId, reason)
+		log.Printf("[MOCK] Payment FAILED for order %s: %s", details.OrderId, reason)
 
 		return models.PaymentResult{
 			Success:       false,
@@ -63,7 +63,36 @@ func (m *MockPaymentProcessor) ProcessPayment(ctx context.Context, details model
 	}
 
 	transactionID := fmt.Sprintf("TXN-%s", uuid.NewString()[:8])
-	log.Printf("[MOCK] Payment SUCCESSFUL for booking %s, transaction: %s", details.OrderId, transactionID)
+	log.Printf("[MOCK] Payment SUCCESSFUL for order %s, transaction: %s", details.OrderId, transactionID)
+
+	return models.PaymentResult{
+		Success:       true,
+		OrderId:       details.OrderId,
+		CustomerId:    details.CustomerId,
+		TransactionID: transactionID,
+		Amount:        details.Amount,
+		Currency:      details.Currency,
+	}, nil
+}
+
+func (m *MockPaymentProcessor) RevertPayemnt(ctx context.Context, details models.PaymentDetails) (models.PaymentResult, error) {
+	log.Printf("[MOCK] Compensating customer %s, amount %d %s",
+		details.CustomerId,
+		details.Amount,
+		details.Currency,
+	)
+
+	select {
+	case <-time.After(m.ProcessingTime):
+	case <-ctx.Done():
+		return models.PaymentResult{
+			Success:       false,
+			FailureReason: ctx.Err().Error(),
+		}, ctx.Err()
+	}
+
+	transactionID := fmt.Sprintf("TXN-%s", uuid.NewString()[:8])
+	log.Printf("[MOCK] Compensation SUCCESSFUL for customer %s, transaction: %s", details.CustomerId, transactionID)
 
 	return models.PaymentResult{
 		Success:       true,

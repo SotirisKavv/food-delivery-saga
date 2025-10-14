@@ -20,13 +20,16 @@ type Item struct {
 }
 
 type Order struct {
-	OrderId         string          `json:"order_id"` //	Primary Key
-	CustomerId      string          `json:"customer_id"`
-	RestaurantId    string          `json:"restaurant_id"`
-	Items           map[string]Item `json:"items"`
-	Amount          int64           `json:"amount_cents"`
-	Currency        string          `json:"currency"`
-	DeliveryAddress string          `json:"delivery_address"`
+	OrderId           string          `json:"order_id"` //	Primary Key
+	CustomerId        string          `json:"customer_id"`
+	RestaurantId      string          `json:"restaurant_id"`
+	Items             map[string]Item `json:"items"`
+	Amount            int64           `json:"amount_cents"`
+	Currency          string          `json:"currency"`
+	Status            OrderStatus     `json:"status"`
+	CancelationReason string          `json:"cancelation_reason"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 type OrderRequest struct {
