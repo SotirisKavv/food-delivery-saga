@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
@@ -17,7 +18,7 @@ import (
 type Handler struct {
 	Producer        *kafka.Producer
 	TicketRepo      repository.Repository[models.Ticket]
-	RestoRepo       repository.Repository[models.Restaurant]
+	Database        *database.Database
 	TicketScheduler *scheduler.DelayQueue[models.Ticket]
 	Dispatcher      *events.Dispatcher
 }
@@ -27,16 +28,13 @@ func NewHandler(producer *kafka.Producer) *Handler {
 	ticketRepo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(r models.Ticket) string {
 		return ticketKeyPrefix + r.OrderId
 	})
-	restoRepo, _ := repository.NewRepository(context.Background(), repository.RepositoryMemory, func(r models.Restaurant) string {
-		return r.RestaurantId
-	})
-	_ = seedInventory(context.Background(), restoRepo)
+	db := database.NewPGDatabase()
 	sched := scheduler.NewQueue[models.Ticket](0)
 
 	h := &Handler{
 		Producer:        producer,
 		TicketRepo:      ticketRepo,
-		RestoRepo:       restoRepo,
+		Database:        db,
 		TicketScheduler: sched,
 		Dispatcher:      dispatcher,
 	}
@@ -57,19 +55,11 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	log.Printf("[HANDLER] %s order=%s, restoID=%s, items=%+v",
-		evt.Metadata.Type,
-		evt.Metadata.OrderId,
-		evt.RestaurantId,
-		evt.ItemsReserved,
-	)
 	ticket := models.Ticket{
 		OrderId:      evt.Metadata.OrderId,
 		RestaurantId: evt.RestaurantId,
 		Items:        evt.ItemsReserved,
 	}
-
-	log.Printf("[HANDLER] Ticket to save: %v", ticket)
 
 	if err := h.TicketRepo.Save(ctx, ticket); err != nil {
 		return fmt.Errorf("Failed to save ticket %s: %w", ticket.OrderId, err)
@@ -86,13 +76,8 @@ func (h *Handler) OnPaymentAuthorized(evt events.EventPaymentProcessed) error {
 	if err != nil {
 		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to retrieve ticket: %+v", err))
 	}
-	log.Printf("[HANDLER] Ticket retrieved: orderId=%s, restoId=%s", ticket.OrderId, ticket.RestaurantId)
 
-	if ticket.RestaurantId == "" {
-		return h.PublishRestaurantRejected(ctx, evt, "Ticket is missing restaurant_id")
-	}
-
-	restaurant, err := h.RestoRepo.Load(ctx, ticket.RestaurantId)
+	restaurant, err := h.Database.GetRestaurantAndPreparationInfo(ctx, ticket.RestaurantId)
 	if err != nil {
 		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to retrieve restaurant: %+v", err))
 	}
@@ -110,34 +95,41 @@ func (h *Handler) OnPaymentAuthorized(evt events.EventPaymentProcessed) error {
 	}
 
 	restaurant.CurrentLoad = load
-	err = h.RestoRepo.Update(ctx, restaurant)
+	err = h.Database.UpdateRestaurantLoad(ctx, restaurant)
 	if err != nil {
 		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to update restaurant: %+v", err))
 	}
 	ticket.ETAminutes = time.Duration(load) * time.Second
 	ticket.AcceptedAt = time.Now()
 
+	if err := h.Database.SaveTicket(ctx, ticket); err != nil {
+		return fmt.Errorf("Failed to save ticket (id=%s): %w", ticket.OrderId, err)
+	}
+
 	h.TicketScheduler.Push(scheduler.Entry[models.Ticket]{
 		ID:      ticket.OrderId,
 		Value:   ticket,
 		ReadyAt: ticket.AcceptedAt.Add(ticket.ETAminutes),
 	})
-	log.Printf("[HANDLER] Ticket scheduled: order_id=%s ready_at=%s eta=%s", ticket.OrderId, ticket.AcceptedAt.Add(ticket.ETAminutes).Format(time.RFC3339), ticket.ETAminutes)
 	return h.PublishRestaurantAccepted(ctx, ticket, evt)
 }
 
 func (h *Handler) CheckForReadyTickets(ctx context.Context) error {
 	for item := range h.TicketScheduler.Out {
 		ticket := item.Value
-		restaurant, err := h.RestoRepo.Load(ctx, ticket.RestaurantId)
+		restaurant, err := h.Database.GetRestaurantAndPreparationInfo(ctx, ticket.RestaurantId)
 		if err != nil {
 			return fmt.Errorf("Failed to retrieve restaurant (id=%s): %w", ticket.RestaurantId, err)
 		}
+
 		restaurant.CurrentLoad -= int64(ticket.ETAminutes.Seconds())
-		if err := h.RestoRepo.Update(ctx, restaurant); err != nil {
+		if err := h.Database.UpdateRestaurantLoad(ctx, restaurant); err != nil {
 			return fmt.Errorf("Failed to update restaurant (id=%s): %w", ticket.RestaurantId, err)
 		}
-		log.Printf("[HANDLER] Ticket ready: order_id=%s", ticket.OrderId)
+		if err := h.Database.UpdateTicketCompleted(ctx, ticket.OrderId); err != nil {
+			return fmt.Errorf("Failed to update ticket (id=%s): %w", ticket.OrderId, err)
+		}
+
 		if err := h.PublishRestaurantReady(ctx, ticket); err != nil {
 			log.Printf("[HANDLER] Failed to pop ticket out of the scheduler: %v", err)
 		}
@@ -216,36 +208,4 @@ func (h *Handler) PublishRestaurantReady(ctx context.Context, ticket models.Tick
 	}
 
 	return h.Producer.PublishEvent(ctx, message)
-}
-
-func seedInventory(ctx context.Context, repo repository.Repository[models.Restaurant]) error {
-	restaurants := []models.Restaurant{
-		{
-			RestaurantId:          "resto-1",
-			CapacityMax:           120,
-			ParallelizationFactor: 2,
-			Items: map[string]models.Item{
-				"burger": {SKU: "burger", PrepTime: 20},
-				"fries":  {SKU: "fries", PrepTime: 5},
-				"cola":   {SKU: "cola", PrepTime: 1},
-			},
-		},
-		{
-			RestaurantId:          "resto-2",
-			CapacityMax:           120,
-			ParallelizationFactor: 3,
-			Items: map[string]models.Item{
-				"pizza": {SKU: "pizza", PrepTime: 30},
-				"salad": {SKU: "salad", PrepTime: 5},
-				"water": {SKU: "water", PrepTime: 1},
-			},
-		},
-	}
-
-	for _, r := range restaurants {
-		if err := repo.Save(ctx, r); err != nil {
-			return err
-		}
-	}
-	return nil
 }

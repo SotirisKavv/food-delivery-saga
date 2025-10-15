@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
-	"food-delivery-saga/pkg/repository"
 	"log"
 	"time"
 
@@ -17,29 +17,17 @@ import (
 type Handler struct {
 	Dispatcher *events.Dispatcher
 	Producer   *kafka.Producer
-	ReservRepo repository.Repository[models.ItemReservation]
-	RestoRepo  repository.Repository[models.Restaurant]
+	Database   *database.Database
 }
 
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
-	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
-	defer done()
+	database := database.NewPGDatabase()
 
-	itemResRepo, _ := repository.NewRepository(ctx, repository.RepositoryMemory, func(ir models.ItemReservation) string {
-		return ir.OrderId
-	})
-
-	restoRepo, _ := repository.NewRepository(ctx, repository.RepositoryMemory, func(r models.Restaurant) string {
-		return r.RestaurantId
-	})
-
-	_ = seedInventory(ctx, restoRepo)
 	h := &Handler{
 		Producer:   producer,
 		Dispatcher: dispatcher,
-		RestoRepo:  restoRepo,
-		ReservRepo: itemResRepo,
+		Database:   database,
 	}
 	events.Register(dispatcher, events.EvtTypeOrderPlaced, h.OnOrderPlaced)
 	events.Register(dispatcher, events.EvtTypePaymentFailed, h.OnPaymentFailed)
@@ -55,7 +43,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	inventory, err := h.RestoRepo.Load(ctx, evt.RestaurantId)
+	inventory, err := h.Database.GetRestaurantStock(ctx, evt.RestaurantId)
 	if err != nil {
 		return fmt.Errorf("Failed to load Restaurant with id %s: %+v", evt.RestaurantId, err)
 	}
@@ -83,7 +71,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 		inventory.Items[id] = dish
 	}
 
-	if err := h.RestoRepo.Update(ctx, inventory); err != nil {
+	if err := h.Database.UpdateRestaurantStock(ctx, inventory); err != nil {
 		failureReason := fmt.Sprintf("Failed to update inventory: %+v", err)
 		return h.PublishItemsReservationFailed(evt, failureReason)
 	}
@@ -96,7 +84,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 		ReservedItems: evt.Items,
 	}
 
-	if err := h.ReservRepo.Save(ctx, reservation); err != nil {
+	if err := h.Database.SaveReservation(ctx, reservation); err != nil {
 		failureReason := fmt.Sprintf("Failed to save reservation: %+v", err)
 		return h.PublishItemsReservationFailed(evt, failureReason)
 	}
@@ -128,12 +116,12 @@ func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) erro
 }
 
 func (h *Handler) HandleServiceFailure(ctx context.Context, orderId string) string {
-	reservation, err := h.ReservRepo.Load(ctx, orderId)
+	reservation, err := h.Database.GetReservedItems(ctx, orderId)
 	if err != nil {
 		return fmt.Sprintf("Failed to save reservation: %+v", err)
 	}
 
-	inventory, err := h.RestoRepo.Load(ctx, reservation.RestaurantId)
+	inventory, err := h.Database.GetRestaurantStock(ctx, reservation.RestaurantId)
 	if err != nil {
 		return fmt.Sprintf("Failed to load Restaurant with id %s: %+v", reservation.RestaurantId, err)
 	}
@@ -149,7 +137,10 @@ func (h *Handler) HandleServiceFailure(ctx context.Context, orderId string) stri
 		inventory.Items[id] = dish
 	}
 
-	if err := h.RestoRepo.Update(ctx, inventory); err != nil {
+	if err := h.Database.UpdateRestaurantStock(ctx, inventory); err != nil {
+		return fmt.Sprintf("Failed to update Inventory: %+v", err)
+	}
+	if err := h.Database.UpdateReservationReleased(ctx, reservation.OrderId); err != nil {
 		return fmt.Sprintf("Failed to update Inventory: %+v", err)
 	}
 	log.Printf("Current Inventory after update: %+v", inventory)
@@ -234,32 +225,4 @@ func (h *Handler) PublishToDLQ(ctx context.Context, mtdt events.Metadata, payloa
 	}
 
 	return h.Producer.PublishEvent(ctx, message)
-}
-
-func seedInventory(ctx context.Context, repo repository.Repository[models.Restaurant]) error {
-	restaurants := []models.Restaurant{
-		{
-			RestaurantId: "resto-1",
-			Items: map[string]models.Item{
-				"burger": {SKU: "burger", Quantity: 50},
-				"fries":  {SKU: "fries", Quantity: 120},
-				"cola":   {SKU: "cola", Quantity: 75},
-			},
-		},
-		{
-			RestaurantId: "resto-2",
-			Items: map[string]models.Item{
-				"pizza": {SKU: "pizza", Quantity: 40},
-				"salad": {SKU: "salad", Quantity: 25},
-				"water": {SKU: "water", Quantity: 200},
-			},
-		},
-	}
-
-	for _, r := range restaurants {
-		if err := repo.Save(ctx, r); err != nil {
-			return err
-		}
-	}
-	return nil
 }

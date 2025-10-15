@@ -54,6 +54,7 @@ type ItemReservation struct {
 	CustomerId    string          `json:"customer_id"`
 	RestaurantId  string          `json:"restaurant_id"`
 	ReservedItems map[string]Item `json:"reserved_items"`
+	Status        string          `json:"status"`
 }
 
 type PaymentDetails struct {
@@ -88,4 +89,5 @@ type Ticket struct {
 	Items        map[string]Item `json:"items"`
 	ETAminutes   time.Duration   `json:"eta_minutes"`
 	AcceptedAt   time.Time       `json:"accepted_at"`
+	Status       string          `json:"status"`
 }

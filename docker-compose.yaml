@@ -87,6 +87,29 @@ services:
     networks:
       - order-network
 
+  # Postgres for services
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deployments/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - order-network
+
   
   # Redis (cache/store)
   redis:
@@ -119,11 +142,14 @@ services:
         condition: service_healthy
       kafka-setup:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
       - API_GATEWAY_PORT
       - KAFKA_BROKERS
+      - PGSQL_URL
     env_file:
       - .env
     networks:
@@ -147,8 +173,11 @@ services:
         condition: service_healthy
       kafka-setup:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
       - KAFKA_BROKERS
+      - PGSQL_URL
     env_file:
       - .env
     networks:
@@ -167,11 +196,14 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       - KAFKA_BROKERS
       - REDIS_CLIENT_ADDRESS
       - REDIS_CLIENT_PASSWORD
       - REDIS_CLIENT_TTL
+      - PGSQL_URL
     env_file:
       - .env
     networks:
@@ -188,8 +220,11 @@ services:
         condition: service_healthy
       kafka-setup:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
       - KAFKA_BROKERS
+      - PGSQL_URL
     env_file:
       - .env
     networks:
@@ -202,3 +237,4 @@ networks:
 
 volumes:
   redis-data:
+  pgdata:

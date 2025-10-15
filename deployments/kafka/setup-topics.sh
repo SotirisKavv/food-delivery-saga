@@ -50,20 +50,21 @@ fi
 echo -e "${YELLOW}Creating topics...${NC}"
 echo ""
 
-while IFS= read -r line; do
-    # Skip empty lines and comments
-    [ -z "$line" ] && continue
-    [[ "$line" =~ ^#.*$ ]] && continue
-    
-    IFS=":" read -r topic partitions replication <<< "$line"
-    topic=$(echo "$topic" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    partitions=$(echo "$partitions" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    replication=$(echo "$replication" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    
+while IFS=: read -r topic partitions replication; do
+    # Trim fields and strip CR
+    topic=$(echo -n "$topic" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    partitions=$(echo -n "$partitions" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    replication=$(echo -n "$replication" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    if [ -z "$topic" ] || [ -z "$partitions" ] || [ -z "$replication" ]; then
+        echo -e "${YELLOW}Skipping invalid line with parsed fields: topic='${topic}', partitions='${partitions}', repl='${replication}'${NC}"
+        continue
+    fi
+
     echo -e "Creating topic: ${GREEN}${topic}${NC}"
     echo "  Partitions: ${partitions}"
     echo "  Replication Factor: ${replication}"
-    
+
     kafka-topics --create \
         --if-not-exists \
         --topic "${topic}" \
@@ -77,7 +78,23 @@ while IFS= read -r line; do
         fi
     done
     echo ""
-done < "${TOPICS_CONFIG}"
+done < <(
+    sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' "${TOPICS_CONFIG}" \
+    | grep -Ev '^\s*#' \
+    | grep -Ev '^\s*$'
+)
+
+# # Defensive: ensure DLQ exists even if config parsing fails for the last line
+# DLQ_TOPIC=${DLQ_TOPIC:-dlq.events}
+# DLQ_PARTITIONS=${DLQ_PARTITIONS:-3}
+# DLQ_REPLICATION=${DLQ_REPLICATION:-1}
+# echo -e "Ensuring DLQ topic exists: ${GREEN}${DLQ_TOPIC}${NC}"
+# kafka-topics --create \
+#     --if-not-exists \
+#     --topic "${DLQ_TOPIC}" \
+#     --partitions "${DLQ_PARTITIONS}" \
+#     --replication-factor "${DLQ_REPLICATION}" \
+#     --bootstrap-server "${KAFKA_BROKER}" >/dev/null 2>&1 || true
 
 # List all topics for verification
 echo -e "${YELLOW}========================================${NC}"

@@ -3,34 +3,29 @@ package service
 import (
 	"context"
 	"fmt"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
-	"food-delivery-saga/pkg/repository"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 type Service struct {
-	Dispatcher      *events.Dispatcher
-	Producer        *kafka.Producer
-	OrderRepository repository.Repository[models.Order]
+	Dispatcher *events.Dispatcher
+	Producer   *kafka.Producer
+	Database   *database.Database
 }
 
 func NewService(producer *kafka.Producer) *Service {
-	repo, err := repository.NewRepository(context.Background(), repository.RepositoryMemory, func(o models.Order) string {
-		return o.OrderId
-	})
-	if err != nil {
-		panic(fmt.Errorf("failed to initialize order repository: %w", err))
-	}
+	database := database.NewPGDatabase()
 	dispatcher := events.NewDispatcher()
 
 	service := &Service{
-		Producer:        producer,
-		Dispatcher:      dispatcher,
-		OrderRepository: repo,
+		Producer:   producer,
+		Dispatcher: dispatcher,
+		Database:   database,
 	}
 
 	events.Register(service.Dispatcher, events.EvtTypeItemsReserved, service.OnItemsProcessed)
@@ -73,11 +68,9 @@ func (s *Service) SaveOrder(ctx context.Context, req *models.OrderRequest) (*mod
 		Amount:       req.Amount,
 		Currency:     req.Currency,
 		Status:       models.ORDER_STATUS_PENDING,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
 	}
 
-	if err := s.OrderRepository.Save(ctx, order); err != nil {
+	if err := s.Database.SaveOrder(ctx, order); err != nil {
 		return nil, err
 	}
 
@@ -116,7 +109,7 @@ func (s *Service) PublishOrderPlaced(ctx context.Context, orderId string, req *m
 }
 
 func (s *Service) GetOrder(ctx context.Context, id string) (*models.OrderResponse, error) {
-	order, err := s.OrderRepository.Load(ctx, id)
+	order, err := s.Database.GetOrder(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +132,7 @@ func (s *Service) OnItemsProcessed(evt events.EventItemsProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	order, err := s.OrderRepository.Load(ctx, evt.Metadata.OrderId)
+	order, err := s.Database.GetOrder(ctx, evt.Metadata.OrderId)
 	if err != nil {
 		return fmt.Errorf("Failed to retrieve Order with Id %s: %w", evt.Metadata.OrderId, err)
 	}
@@ -147,15 +140,13 @@ func (s *Service) OnItemsProcessed(evt events.EventItemsProcessed) error {
 	switch evt.Metadata.Type {
 	case events.EvtTypeItemsReleased:
 		order.Status = models.ORDER_STATUS_RESERVED
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	case events.EvtTypeItemsReservationFailed:
 		order.Status = models.ORDER_STATUS_CANCELED
 		order.CancelationReason = evt.Reason
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	}
@@ -167,7 +158,7 @@ func (s *Service) OnPaymentProcessed(evt events.EventPaymentProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	order, err := s.OrderRepository.Load(ctx, evt.Metadata.OrderId)
+	order, err := s.Database.GetOrder(ctx, evt.Metadata.OrderId)
 	if err != nil {
 		return fmt.Errorf("Failed to retrieve Order with Id %s: %w", evt.Metadata.OrderId, err)
 	}
@@ -175,15 +166,13 @@ func (s *Service) OnPaymentProcessed(evt events.EventPaymentProcessed) error {
 	switch evt.Metadata.Type {
 	case events.EvtTypePaymentAuthorized:
 		order.Status = models.ORDER_STATUS_AUTHORIZED
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	case events.EvtTypePaymentFailed:
 		order.Status = models.ORDER_STATUS_CANCELED
 		order.CancelationReason = evt.Reason
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	}
@@ -195,7 +184,7 @@ func (s *Service) OnRestaurantProcessed(evt events.EventRestaurantProcessed) err
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	order, err := s.OrderRepository.Load(ctx, evt.Metadata.OrderId)
+	order, err := s.Database.GetOrder(ctx, evt.Metadata.OrderId)
 	if err != nil {
 		return fmt.Errorf("Failed to retrieve Order with Id %s: %w", evt.Metadata.OrderId, err)
 	}
@@ -203,21 +192,18 @@ func (s *Service) OnRestaurantProcessed(evt events.EventRestaurantProcessed) err
 	switch evt.Metadata.Type {
 	case events.EvtTypeRestaurantAccepted:
 		order.Status = models.ORDER_STATUS_ACCEPTED
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	case events.EvtTypeRestaurantRejected:
 		order.Status = models.ORDER_STATUS_CANCELED
 		order.CancelationReason = evt.Reason
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	case events.EvtTypeRestaurantReady:
 		order.Status = models.ORDER_STATUS_COMPLETED
-		order.UpdatedAt = time.Now()
-		if err := s.OrderRepository.Update(ctx, order); err != nil {
+		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
 			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
 		}
 	}

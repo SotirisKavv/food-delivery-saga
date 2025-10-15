@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	paymentprocessor "food-delivery-saga/cmd/payment/server/payment-processor"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
@@ -16,6 +17,7 @@ import (
 
 type Handler struct {
 	Producer   *kafka.Producer
+	Database   *database.Database
 	Repository repository.Repository[models.PaymentDetails]
 	Dispatcher *events.Dispatcher
 	Processor  paymentprocessor.Processor
@@ -25,6 +27,7 @@ const paymentKeyPrefix = "payment:"
 
 func NewHandler(producer *kafka.Producer) *Handler {
 	dispatcher := events.NewDispatcher()
+	db := database.NewPGDatabase()
 	paymentProcessor, _ := paymentprocessor.NewProcessor(paymentprocessor.ProcessorMock)
 	repo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(pd models.PaymentDetails) string {
 		return paymentKeyPrefix + pd.OrderId
@@ -32,6 +35,7 @@ func NewHandler(producer *kafka.Producer) *Handler {
 
 	h := &Handler{
 		Producer:   producer,
+		Database:   db,
 		Repository: repo,
 		Dispatcher: dispatcher,
 		Processor:  paymentProcessor,
@@ -81,6 +85,10 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 		return h.PublishPaymentFailed(ctx, evt, result.FailureReason)
 	}
 
+	if err := h.Database.SavePayment(ctx, details, result.TransactionID); err != nil {
+		return fmt.Errorf("Failed to save payment %s: %w", details.OrderId, err)
+	}
+
 	return h.PublishPaymentAuthorized(ctx, result, evt)
 }
 
@@ -88,7 +96,7 @@ func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) erro
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	details, err := h.Repository.Load(ctx, paymentKeyPrefix+evt.Metadata.OrderId)
+	details, err := h.Database.GetPayment(ctx, evt.Metadata.OrderId)
 	if err != nil {
 		return h.PublishToDLQ(ctx, evt, fmt.Sprintf("Failed to retrieve payment details: %+v", err))
 	}
