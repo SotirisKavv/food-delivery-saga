@@ -54,9 +54,7 @@ services:
 
   # Kafka Topic Setup
   kafka-setup:
-    build:
-      context: deployments/kafka
-      dockerfile: Dockerfile
+    image: confluentinc/cp-kafka:7.5.0
     container_name: kafka-setup
     depends_on:
       kafka:
@@ -66,6 +64,11 @@ services:
       - MAX_WAIT
     env_file:
       - .env
+    volumes:
+      - ./deployments/kafka/topics.conf:/topics.conf:ro
+      - ./deployments/kafka/setup-topics.sh:/setup-topics.sh:ro
+    command: ["bash", "/setup-topics.sh"]
+    restart: "no"
     networks:
       - order-network
 

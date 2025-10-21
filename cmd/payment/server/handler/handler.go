@@ -9,6 +9,7 @@ import (
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
+	"food-delivery-saga/pkg/outbox"
 	"food-delivery-saga/pkg/repository"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 )
 
 type Handler struct {
-	Producer   *kafka.Producer
+	Relay      *outbox.Relay
 	Database   *database.Database
 	Repository repository.Repository[models.PaymentDetails]
 	Dispatcher *events.Dispatcher
@@ -25,17 +26,16 @@ type Handler struct {
 
 const paymentKeyPrefix = "payment:"
 
-func NewHandler(producer *kafka.Producer) *Handler {
+func NewHandler(database *database.Database, relay *outbox.Relay) *Handler {
 	dispatcher := events.NewDispatcher()
-	db := database.NewPGDatabase()
 	paymentProcessor, _ := paymentprocessor.NewProcessor(paymentprocessor.ProcessorMock)
 	repo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(pd models.PaymentDetails) string {
 		return paymentKeyPrefix + pd.OrderId
 	})
 
 	h := &Handler{
-		Producer:   producer,
-		Database:   db,
+		Relay:      relay,
+		Database:   database,
 		Repository: repo,
 		Dispatcher: dispatcher,
 		Processor:  paymentProcessor,
@@ -124,13 +124,12 @@ func (h *Handler) PublishPaymentFailed(ctx context.Context, evt events.EventItem
 		Success: false,
 	}
 
-	message := kafka.EventMessage{
-		Key:   paymentFailed.Metadata.OrderId,
-		Topic: kafka.TopicPayment,
-		Event: paymentFailed,
+	payload, err := json.Marshal(paymentFailed)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }
 
 func (h *Handler) PublishPaymentAuthorized(ctx context.Context, result models.PaymentResult, evt events.EventItemsProcessed) error {
@@ -150,17 +149,15 @@ func (h *Handler) PublishPaymentAuthorized(ctx context.Context, result models.Pa
 		Success:       true,
 	}
 
-	message := kafka.EventMessage{
-		Key:   paymentAuthorized.Metadata.OrderId,
-		Topic: kafka.TopicPayment,
-		Event: paymentAuthorized,
+	payload, err := json.Marshal(paymentAuthorized)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }
 
 func (h *Handler) PublishToDLQ(ctx context.Context, evt events.EventRestaurantProcessed, reason string) error {
-
 	payload, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("Failes to marshal event: %w", err)
@@ -184,11 +181,5 @@ func (h *Handler) PublishToDLQ(ctx context.Context, evt events.EventRestaurantPr
 		Payload: payload,
 	}
 
-	message := kafka.EventMessage{
-		Key:   dlqError.Metadata.OrderId,
-		Topic: kafka.TopicDeadLetterQueue,
-		Event: dlqError,
-	}
-
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.PublishToDLQ(ctx, dlqError)
 }

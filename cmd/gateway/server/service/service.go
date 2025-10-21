@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/events"
-	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
+	"food-delivery-saga/pkg/outbox"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,16 +15,15 @@ import (
 
 type Service struct {
 	Dispatcher *events.Dispatcher
-	Producer   *kafka.Producer
+	Relay      *outbox.Relay
 	Database   *database.Database
 }
 
-func NewService(producer *kafka.Producer) *Service {
-	database := database.NewPGDatabase()
+func NewService(database *database.Database, relay *outbox.Relay) *Service {
 	dispatcher := events.NewDispatcher()
 
 	service := &Service{
-		Producer:   producer,
+		Relay:      relay,
 		Dispatcher: dispatcher,
 		Database:   database,
 	}
@@ -95,13 +95,12 @@ func (s *Service) PublishOrderPlaced(ctx context.Context, orderId string, req *m
 		Items:           req.Items,
 	}
 
-	eventMessage := kafka.EventMessage{
-		Topic: kafka.TopicOrder,
-		Key:   orderEvent.Metadata.OrderId,
-		Event: orderEvent,
+	payload, err := json.Marshal(orderEvent)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := s.Producer.PublishEvent(ctx, eventMessage); err != nil {
+	if err := s.Relay.SaveOutboxEvent(ctx, payload); err != nil {
 		return nil, err
 	}
 

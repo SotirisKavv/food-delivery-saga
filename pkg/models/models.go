@@ -91,3 +91,13 @@ type Ticket struct {
 	AcceptedAt   time.Time       `json:"accepted_at"`
 	Status       string          `json:"status"`
 }
+
+type Outbox struct {
+	Id        string    `json:"id"`
+	Key       string    `json:"key"`
+	Topic     string    `json:"topic"`
+	EventType string    `json:"event_type"`
+	Payload   []byte    `json:"payload"`
+	Published bool      `json:"published"`
+	CreatedAt time.Time `json:"created_at"`
+}

@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
+	"food-delivery-saga/pkg/outbox"
 	"food-delivery-saga/pkg/repository"
 	"food-delivery-saga/pkg/scheduler"
 	"log"
@@ -16,25 +18,24 @@ import (
 )
 
 type Handler struct {
-	Producer        *kafka.Producer
+	Relay           *outbox.Relay
 	TicketRepo      repository.Repository[models.Ticket]
 	Database        *database.Database
 	TicketScheduler *scheduler.DelayQueue[models.Ticket]
 	Dispatcher      *events.Dispatcher
 }
 
-func NewHandler(producer *kafka.Producer) *Handler {
+func NewHandler(database *database.Database, relay *outbox.Relay) *Handler {
 	dispatcher := events.NewDispatcher()
 	ticketRepo, _ := repository.NewRepository(context.Background(), repository.RepositoryRedis, func(r models.Ticket) string {
 		return ticketKeyPrefix + r.OrderId
 	})
-	db := database.NewPGDatabase()
 	sched := scheduler.NewQueue[models.Ticket](0)
 
 	h := &Handler{
-		Producer:        producer,
+		Relay:           relay,
 		TicketRepo:      ticketRepo,
-		Database:        db,
+		Database:        database,
 		TicketScheduler: sched,
 		Dispatcher:      dispatcher,
 	}
@@ -153,13 +154,12 @@ func (h *Handler) PublishRestaurantRejected(ctx context.Context, evt events.Even
 		Success:       false,
 	}
 
-	message := kafka.EventMessage{
-		Key:   rejectionEvt.Metadata.OrderId,
-		Topic: kafka.TopicRestaurant,
-		Event: rejectionEvt,
+	payload, err := json.Marshal(rejectionEvt)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }
 
 func (h *Handler) PublishRestaurantAccepted(ctx context.Context, ticket models.Ticket, evt events.EventPaymentProcessed) error {
@@ -178,13 +178,12 @@ func (h *Handler) PublishRestaurantAccepted(ctx context.Context, ticket models.T
 		Success:    true,
 	}
 
-	message := kafka.EventMessage{
-		Key:   acceptanceEvt.Metadata.OrderId,
-		Topic: kafka.TopicRestaurant,
-		Event: acceptanceEvt,
+	payload, err := json.Marshal(acceptanceEvt)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }
 
 func (h *Handler) PublishRestaurantReady(ctx context.Context, ticket models.Ticket) error {
@@ -201,11 +200,10 @@ func (h *Handler) PublishRestaurantReady(ctx context.Context, ticket models.Tick
 		Success: true,
 	}
 
-	message := kafka.EventMessage{
-		Key:   readyEvt.Metadata.OrderId,
-		Topic: kafka.TopicRestaurant,
-		Event: readyEvt,
+	payload, err := json.Marshal(readyEvt)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }

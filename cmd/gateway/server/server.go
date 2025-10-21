@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"food-delivery-saga/cmd/gateway/server/handler"
 	"food-delivery-saga/cmd/gateway/server/service"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/kafka"
+	"food-delivery-saga/pkg/outbox"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +23,7 @@ type Server struct {
 	Producer *kafka.Producer
 	Consumer *kafka.Consumer
 	Handler  *handler.Handler
+	Relay    *outbox.Relay
 	Router   *gin.Engine
 }
 
@@ -33,7 +36,11 @@ type ServerConfig struct {
 
 func NewServer(conf ServerConfig, prodConf kafka.ProducerConfig, consConf kafka.ConsumerConfig) *Server {
 	producer := kafka.NewProducer(prodConf)
-	orderService := service.NewService(producer)
+	database := database.NewPGDatabase()
+
+	relay := outbox.NewRelay(producer, database, kafka.TopicOrder)
+
+	orderService := service.NewService(database, relay)
 	orderHandler := handler.NewHandler(orderService)
 
 	consumer := kafka.NewConsumer(consConf)
@@ -43,6 +50,7 @@ func NewServer(conf ServerConfig, prodConf kafka.ProducerConfig, consConf kafka.
 		Producer: producer,
 		Consumer: consumer,
 		Handler:  orderHandler,
+		Relay:    relay,
 	}
 
 	server.SetupRouter()
@@ -75,6 +83,9 @@ func (s *Server) SetupRouter() {
 }
 
 func (s *Server) Start() error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", s.Config.Port),
 		Handler:      s.Router,
@@ -91,8 +102,14 @@ func (s *Server) Start() error {
 	}()
 
 	go func() {
-		if err := s.Consumer.ConsumeWithRetry(context.Background(), s.Handler.HandleMessages, 3); err != nil {
+		if err := s.Consumer.ConsumeWithRetry(ctx, s.Handler.HandleMessages, 3); err != nil {
 			log.Printf("Failed to consume message: %+v", err)
+		}
+	}()
+
+	go func() {
+		if err := s.Relay.Run(ctx); err != nil {
+			log.Printf("Relay failure: %+v", err)
 		}
 	}()
 

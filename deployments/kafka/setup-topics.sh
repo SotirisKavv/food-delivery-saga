@@ -1,113 +1,38 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Configuration
-KAFKA_BROKER="${KAFKA_BROKER:-kafka:29092}"
+: "${KAFKA_BROKER:?KAFKA_BROKER is required}"
 MAX_WAIT="${MAX_WAIT:-30}"
-TOPICS_CONFIG="${TOPICS_CONFIG:-/usr/local/etc/topics.conf}"
+CONF="/topics.conf"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-echo -e "${YELLOW}========================================${NC}"
-echo -e "${YELLOW}    Kafka Topic Setup${NC}"
-echo -e "${YELLOW}========================================${NC}"
-echo ""
-
-# Wait for Kafka to be ready
-echo -e "${YELLOW}Waiting for Kafka to be ready at ${KAFKA_BROKER}...${NC}"
-max_attempts=$MAX_WAIT
-attempt=1
-
-while [ $attempt -le $max_attempts ]; do
-    echo -e "Attempt $attempt/$max_attempts..."
-    if kafka-topics --list --bootstrap-server ${KAFKA_BROKER} >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ Kafka is ready!${NC}"
-        break
-    fi
-    if [ $attempt -eq $max_attempts ]; then
-        echo -e "${RED}ERROR: Kafka not ready after ${MAX_WAIT} attempts${NC}"
-        exit 1
-    fi
-    attempt=$((attempt + 1))
-    sleep 1
-done
-echo ""
-
-# Read topics from configuration file
-echo -e "${YELLOW}Reading topics from ${TOPICS_CONFIG}...${NC}"
-echo ""
-
-if [ ! -f "${TOPICS_CONFIG}" ]; then
-    echo -e "${RED}ERROR: Topics configuration file not found at ${TOPICS_CONFIG}${NC}"
-    exit 1
+if [ ! -f "$CONF" ]; then
+  echo "$(date +'%F %T') | topics.conf not found at $CONF"
+  exit 1
 fi
 
-# Create topics
-echo -e "${YELLOW}Creating topics...${NC}"
-echo ""
-
-while IFS=: read -r topic partitions replication; do
-    # Trim fields and strip CR
-    topic=$(echo -n "$topic" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    partitions=$(echo -n "$partitions" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    replication=$(echo -n "$replication" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-
-    if [ -z "$topic" ] || [ -z "$partitions" ] || [ -z "$replication" ]; then
-        echo -e "${YELLOW}Skipping invalid line with parsed fields: topic='${topic}', partitions='${partitions}', repl='${replication}'${NC}"
-        continue
-    fi
-
-    echo -e "Creating topic: ${GREEN}${topic}${NC}"
-    echo "  Partitions: ${partitions}"
-    echo "  Replication Factor: ${replication}"
-
-    kafka-topics --create \
-        --if-not-exists \
-        --topic "${topic}" \
-        --partitions "${partitions}" \
-        --replication-factor "${replication}" \
-        --bootstrap-server "${KAFKA_BROKER}" 2>&1 | while read output_line; do
-        if [[ $output_line == *"already exists"* ]]; then
-            echo -e "  ${YELLOW}Topic already exists, skipping...${NC}"
-        elif [[ $output_line == *"Created topic"* ]]; then
-            echo -e "  ${GREEN}✓ Topic created successfully${NC}"
-        fi
-    done
-    echo ""
-done < <(
-    sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' "${TOPICS_CONFIG}" \
-    | grep -Ev '^\s*#' \
-    | grep -Ev '^\s*$'
-)
-
-# # Defensive: ensure DLQ exists even if config parsing fails for the last line
-# DLQ_TOPIC=${DLQ_TOPIC:-dlq.events}
-# DLQ_PARTITIONS=${DLQ_PARTITIONS:-3}
-# DLQ_REPLICATION=${DLQ_REPLICATION:-1}
-# echo -e "Ensuring DLQ topic exists: ${GREEN}${DLQ_TOPIC}${NC}"
-# kafka-topics --create \
-#     --if-not-exists \
-#     --topic "${DLQ_TOPIC}" \
-#     --partitions "${DLQ_PARTITIONS}" \
-#     --replication-factor "${DLQ_REPLICATION}" \
-#     --bootstrap-server "${KAFKA_BROKER}" >/dev/null 2>&1 || true
-
-# List all topics for verification
-echo -e "${YELLOW}========================================${NC}"
-echo -e "${YELLOW}    Verifying Topics${NC}"
-echo -e "${YELLOW}========================================${NC}"
-echo ""
-
-echo -e "${YELLOW}All topics in Kafka:${NC}"
-kafka-topics --list --bootstrap-server "${KAFKA_BROKER}" | while read topic_name; do
-    echo -e "  ${GREEN}✓${NC} ${topic_name}"
+echo "$(date +'%F %T') | Waiting for Kafka broker $KAFKA_BROKER up to ${MAX_WAIT}s..."
+SECONDS=0
+until kafka-topics --bootstrap-server "$KAFKA_BROKER" --list >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$MAX_WAIT" ]; then
+    echo "$(date +'%F %T') | Timeout waiting for Kafka broker"
+    exit 1
+  fi
+  sleep 2
 done
 
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}    Topic Setup Complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo "$(date +'%F %T') | Kafka is up. Creating topics from $CONF..."
+while IFS=: read -r topic partitions rf || [ -n "${topic:-}" ]; do
+  [ -z "${topic:-}" ] && continue
+  case "$topic" in \#*) continue;; esac
+  # Normalize CRLF and trim whitespace (avoid xargs; use sed)
+  topic="$(printf '%s' "$topic" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  partitions="$(printf '%s' "${partitions:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  rf="$(printf '%s' "${rf:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  # Defaults and numeric guards using bash regex
+  [[ "$partitions" =~ ^[0-9]+$ ]] || partitions=1
+  [[ "$rf" =~ ^[0-9]+$ ]] || rf=1
+  echo "$(date +'%F %T') | Ensuring topic $topic (partitions=$partitions, rf=$rf)"
+  kafka-topics --bootstrap-server "$KAFKA_BROKER" --create --if-not-exists --topic "$topic" --partitions "$partitions" --replication-factor "$rf"
+done < "$CONF"
+
+echo "$(date +'%F %T') | All topics ensured."

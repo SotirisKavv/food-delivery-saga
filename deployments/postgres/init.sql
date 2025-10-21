@@ -84,6 +84,16 @@ CREATE TABLE IF NOT EXISTS tickets (
 	status ticket_status NOT NULL DEFAULT 'PENDING'
 );
 
+CREATE TABLE IF NOT EXISTS outbox (
+	id TEXT PRIMARY KEY,
+	key TEXT NOT NULL,
+	event_type TEXT NOT NULL,
+	topic TEXT NOT NULL,
+	payload JSONB NOT NULL,
+	published BOOLEAN NOT NULL DEFAULT FALSE, 
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes for frequent lookups
 CREATE INDEX IF NOT EXISTS idx_restaurantitems_restaurant ON restaurantitems(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_orderitems_order ON orderitems(orderid);

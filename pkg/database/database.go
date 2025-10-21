@@ -8,16 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Database struct {
-	DB *pgx.Conn
+	DB *pgxpool.Pool
 }
 
 // Init Database
 func NewPGDatabase() *Database {
-	dbConn, err := pgx.Connect(context.Background(), utils.GetEnv("PGSQL_URL", ""))
+	dbConn, err := pgxpool.New(context.Background(), utils.GetEnv("PGSQL_URL", ""))
 	if err != nil {
 		panic(fmt.Errorf("Failed to connect to Postgres DB."))
 	}
@@ -29,7 +29,7 @@ func NewPGDatabase() *Database {
 
 // ORDERS
 func (d *Database) GetOrder(ctx context.Context, orderId string) (models.Order, error) {
-	query := `SELECT id, status, cancelation_reason FROM orders WHERE id = $1;`
+	query := `SELECT id, status, cancelation_reason FROM orders WHERE id = $1 FOR UPDATE;`
 	var order models.Order
 	row := d.DB.QueryRow(ctx, query, orderId)
 	err := row.Scan(&order.OrderId, &order.Status, &order.CancelationReason)
@@ -69,7 +69,6 @@ func (d *Database) UpdateOrderStatus(ctx context.Context, order models.Order) er
 	query := `UPDATE orders 
 			  SET status = $1, cancelation_reason = $2, updated_at = $3
 			  WHERE id = $4;`
-
 	_, err := d.DB.Exec(ctx, query,
 		string(order.Status), order.CancelationReason, time.Now().UTC(), order.OrderId)
 	return err
@@ -81,7 +80,7 @@ func (d *Database) GetRestaurantStock(ctx context.Context, restoId string) (mode
 	query := `SELECT r.restaurant_id, ri.sku, ri.quantity 
 			  FROM restaurants r 
 			  JOIN restaurantItems ri ON r.restaurant_id = ri.restaurant_id 
-			  WHERE r.restaurant_id = $1;`
+			  WHERE r.restaurant_id = $1 FOR UPDATE;`
 	var restaurant models.Restaurant
 	restaurant.Items = make(map[string]models.Item)
 
@@ -107,7 +106,7 @@ func (d *Database) GetRestaurantAndPreparationInfo(ctx context.Context, restoId 
 				r.parallelization_factor, ri.sku, ri.prep_time 
 			  FROM restaurants r 
 			  JOIN restaurantItems ri ON r.restaurant_id = ri.restaurant_id 
-			  WHERE r.restaurant_id = $1;`
+			  WHERE r.restaurant_id = $1 FOR UPDATE;`
 	var restaurant models.Restaurant
 	restaurant.Items = make(map[string]models.Item)
 
@@ -138,7 +137,6 @@ func (d *Database) UpdateRestaurantStock(ctx context.Context, restaurant models.
 			  ON CONFLICT(sku, restaurant_id)
 			  DO UPDATE SET
 			  quantity = EXCLUDED.quantity;`
-
 	placeholders := []string{}
 	values := []any{}
 
@@ -166,7 +164,6 @@ func (d *Database) SaveReservation(ctx context.Context, reservation models.ItemR
 			  			 VALUES ($1, $2, $3);`
 	reservedItemsQuery := `INSERT INTO reservedItems(sku, order_id, quantity)
 						   VALUES %s;`
-
 	placeholders := []string{}
 	values := []any{}
 
@@ -194,7 +191,7 @@ func (d *Database) GetReservedItems(ctx context.Context, reservationId string) (
 	query := `SELECT r.restaurant_id, ri.sku, ri.quantity 
 			  FROM reservations r 
 			  JOIN reservedItems ri ON r.order_id = ri.order_id 
-			  WHERE r.order_id = $1;`
+			  WHERE r.order_id = $1 FOR UPDATE;`
 	var reservation models.ItemReservation
 	reservation.ReservedItems = make(map[string]models.Item)
 
@@ -226,7 +223,6 @@ func (d *Database) UpdateReservationReleased(ctx context.Context, reservationId 
 func (d *Database) SavePayment(ctx context.Context, details models.PaymentDetails, txnId string) error {
 	query := `INSERT INTO payments(order_id, customer_id, amount, currency, pm_id, transaction_id)
 			  VALUES ($1, $2, $3, $4, $5, $6);`
-
 	_, err := d.DB.Exec(ctx, query,
 		details.OrderId, details.CustomerId, details.Amount,
 		details.Currency, details.PaymentMethodId, txnId)
@@ -235,14 +231,9 @@ func (d *Database) SavePayment(ctx context.Context, details models.PaymentDetail
 }
 
 func (d *Database) GetPayment(ctx context.Context, paymentId string) (models.PaymentDetails, error) {
-	query := `SELECT 
-				order_id,
-				customer_id,
-				amount,
-				currency,
-				pm_id
+	query := `SELECT order_id, customer_id,	amount,	currency, pm_id
 			  FROM payments 
-			  WHERE order_id = $1;`
+			  WHERE order_id = $1 FOR UPDATE;`
 	var details models.PaymentDetails
 	row := d.DB.QueryRow(ctx, query, paymentId)
 	err := row.Scan(&details.OrderId,
@@ -270,4 +261,45 @@ func (d *Database) UpdateTicketCompleted(ctx context.Context, ticketId string) e
 			  WHERE order_id = $1;`
 	_, err := d.DB.Exec(ctx, query, ticketId)
 	return err
+}
+
+// OUTBOX
+func (d *Database) SaveOutbox(ctx context.Context, outbox models.Outbox) error {
+	query := `INSERT INTO outbox(id, key, event_type, payload, topic)
+			  VALUES ($1, $2, $3, $4, $5);`
+	_, err := d.DB.Exec(ctx, query,
+		outbox.Id, outbox.Key, outbox.EventType, outbox.Payload, outbox.Topic,
+	)
+	return err
+}
+
+func (d *Database) GetUnpublishedOutbox(ctx context.Context, limit int, topic string) ([]models.Outbox, error) {
+	query := `SELECT id, key, event_type, payload
+			  FROM outbox
+			  WHERE published = FALSE AND topic = $1
+			  LIMIT $2 FOR UPDATE SKIP LOCKED;`
+	rows, err := d.DB.Query(ctx, query, topic, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var batch []models.Outbox
+	for rows.Next() {
+		var outbox models.Outbox
+		if err := rows.Scan(&outbox.Id, &outbox.Key, &outbox.EventType, &outbox.Payload); err != nil {
+			return nil, err
+		}
+		batch = append(batch, outbox)
+	}
+
+	return batch, nil
+}
+
+func (d *Database) UpdateOutboxPublished(ctx context.Context, ids []string) error {
+	query := `UPDATE outbox SET published = TRUE WHERE id = ANY($1::text[]);`
+	if _, err := d.DB.Exec(ctx, query, ids); err != nil {
+		return err
+	}
+	return nil
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"food-delivery-saga/cmd/inventory/server/handler"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/kafka"
+	"food-delivery-saga/pkg/outbox"
 	"log"
 	"os"
 	"os/signal"
@@ -17,17 +19,24 @@ import (
 type Server struct {
 	Producer *kafka.Producer
 	Consumer *kafka.Consumer
+	Relay    *outbox.Relay
 	Handler  *handler.Handler
 }
 
 func NewServer(prodConf kafka.ProducerConfig, consConf kafka.ConsumerConfig) *Server {
 	producer := kafka.NewProducer(prodConf)
+	database := database.NewPGDatabase()
+
+	relay := outbox.NewRelay(producer, database, kafka.TopicInventory)
+
+	inventoryHandler := handler.NewHandler(database, relay)
+
 	consumer := kafka.NewConsumer(consConf)
-	inventoryHandler := handler.NewHandler(producer)
 
 	return &Server{
 		Producer: producer,
 		Consumer: consumer,
+		Relay:    relay,
 		Handler:  inventoryHandler,
 	}
 }
@@ -42,6 +51,13 @@ func (s *Server) Start() error {
 	g.Go(func() error {
 		err := s.Consumer.ConsumeWithRetry(ctx, s.Handler.HandleMessage, 3)
 		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := s.Relay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return err
 		}
 		return nil

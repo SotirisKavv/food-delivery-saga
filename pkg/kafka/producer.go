@@ -58,15 +58,15 @@ func (p *Producer) PublishMultipleEvents(ctx context.Context, events []EventMess
 	messages := make([]kafka.Message, len(events))
 
 	for i, event := range events {
-		value, err := json.Marshal(event.Event)
-		if err != nil {
-			return fmt.Errorf("Failed to marshal event %d: %w", i, err)
-		}
+		// value, err := json.Marshal(event.Event)
+		// if err != nil {
+		// 	return fmt.Errorf("Failed to marshal event %d: %w", i, err)
+		// }
 
 		messages[i] = kafka.Message{
 			Topic: event.Topic,
 			Key:   []byte(event.Key),
-			Value: value,
+			Value: event.Event,
 			Time:  time.Now(),
 		}
 	}

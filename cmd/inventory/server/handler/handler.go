@@ -8,6 +8,7 @@ import (
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
+	"food-delivery-saga/pkg/outbox"
 	"log"
 	"time"
 
@@ -16,16 +17,15 @@ import (
 
 type Handler struct {
 	Dispatcher *events.Dispatcher
-	Producer   *kafka.Producer
+	Relay      *outbox.Relay
 	Database   *database.Database
 }
 
-func NewHandler(producer *kafka.Producer) *Handler {
+func NewHandler(database *database.Database, relay *outbox.Relay) *Handler {
 	dispatcher := events.NewDispatcher()
-	database := database.NewPGDatabase()
 
 	h := &Handler{
-		Producer:   producer,
+		Relay:      relay,
 		Dispatcher: dispatcher,
 		Database:   database,
 	}
@@ -53,7 +53,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 		if !ok {
 			failureReason := fmt.Sprintf("Item %s not available in restaurant %s", id, evt.RestaurantId)
 			log.Printf(failureReason)
-			return h.PublishItemsReservationFailed(evt, failureReason)
+			return h.PublishItemsReservationFailed(ctx, evt, failureReason)
 		}
 
 		if dish.Quantity < item.Quantity {
@@ -61,7 +61,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 				evt.RestaurantId, id, item.Quantity, dish.Quantity,
 			)
 			log.Printf(failureReason)
-			return h.PublishItemsReservationFailed(evt, failureReason)
+			return h.PublishItemsReservationFailed(ctx, evt, failureReason)
 		}
 	}
 
@@ -73,7 +73,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 
 	if err := h.Database.UpdateRestaurantStock(ctx, inventory); err != nil {
 		failureReason := fmt.Sprintf("Failed to update inventory: %+v", err)
-		return h.PublishItemsReservationFailed(evt, failureReason)
+		return h.PublishItemsReservationFailed(ctx, evt, failureReason)
 	}
 	log.Printf("Current Inventory after update: %+v", inventory)
 
@@ -86,10 +86,10 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 
 	if err := h.Database.SaveReservation(ctx, reservation); err != nil {
 		failureReason := fmt.Sprintf("Failed to save reservation: %+v", err)
-		return h.PublishItemsReservationFailed(evt, failureReason)
+		return h.PublishItemsReservationFailed(ctx, evt, failureReason)
 	}
 
-	return h.PublishItemsReserved(evt)
+	return h.PublishItemsReserved(ctx, evt)
 
 }
 
@@ -146,10 +146,9 @@ func (h *Handler) HandleServiceFailure(ctx context.Context, orderId string) stri
 	log.Printf("Current Inventory after update: %+v", inventory)
 
 	return ""
-
 }
 
-func (h *Handler) PublishItemsReservationFailed(evt events.EventOrderPlaced, reason string) error {
+func (h *Handler) PublishItemsReservationFailed(ctx context.Context, evt events.EventOrderPlaced, reason string) error {
 	reservationFailed := &events.EventItemsProcessed{
 		Metadata: events.Metadata{
 			MessageId:     uuid.NewString(),
@@ -165,16 +164,15 @@ func (h *Handler) PublishItemsReservationFailed(evt events.EventOrderPlaced, rea
 		Success:      false,
 	}
 
-	kafkaMessage := kafka.EventMessage{
-		Key:   reservationFailed.Metadata.OrderId,
-		Topic: kafka.TopicInventory,
-		Event: reservationFailed,
+	payload, err := json.Marshal(reservationFailed)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(context.Background(), kafkaMessage)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }
 
-func (h *Handler) PublishItemsReserved(evt events.EventOrderPlaced) error {
+func (h *Handler) PublishItemsReserved(ctx context.Context, evt events.EventOrderPlaced) error {
 	itemsReserved := &events.EventItemsProcessed{
 		Metadata: events.Metadata{
 			MessageId:     uuid.NewString(),
@@ -190,13 +188,12 @@ func (h *Handler) PublishItemsReserved(evt events.EventOrderPlaced) error {
 		Success:       true,
 	}
 
-	kafkaMessage := kafka.EventMessage{
-		Key:   itemsReserved.Metadata.OrderId,
-		Topic: kafka.TopicInventory,
-		Event: itemsReserved,
+	payload, err := json.Marshal(itemsReserved)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal event: %w", err)
 	}
 
-	return h.Producer.PublishEvent(context.Background(), kafkaMessage)
+	return h.Relay.SaveOutboxEvent(ctx, payload)
 }
 
 func (h *Handler) PublishToDLQ(ctx context.Context, mtdt events.Metadata, payload []byte, reason string) error {
@@ -218,11 +215,5 @@ func (h *Handler) PublishToDLQ(ctx context.Context, mtdt events.Metadata, payloa
 		Payload: payload,
 	}
 
-	message := kafka.EventMessage{
-		Key:   dlqError.Metadata.OrderId,
-		Topic: kafka.TopicDeadLetterQueue,
-		Event: dlqError,
-	}
-
-	return h.Producer.PublishEvent(ctx, message)
+	return h.Relay.PublishToDLQ(ctx, dlqError)
 }

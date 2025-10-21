@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"food-delivery-saga/cmd/restaurant/server/handler"
+	"food-delivery-saga/pkg/database"
 	"food-delivery-saga/pkg/kafka"
+	"food-delivery-saga/pkg/outbox"
 	"log"
 	"os/signal"
 	"syscall"
@@ -16,16 +18,22 @@ import (
 type Server struct {
 	Producer *kafka.Producer
 	Consumer *kafka.Consumer
+	Relay    *outbox.Relay
 	Handler  *handler.Handler
 }
 
 func NewServer(prodConf kafka.ProducerConfig, consConf kafka.ConsumerConfig) *Server {
 	producer := kafka.NewProducer(prodConf)
+	db := database.NewPGDatabase()
+
+	relay := outbox.NewRelay(producer, db, kafka.TopicRestaurant)
+	handler := handler.NewHandler(db, relay)
+
 	consumer := kafka.NewConsumer(consConf)
-	handler := handler.NewHandler(producer)
 
 	return &Server{
 		Producer: producer,
+		Relay:    relay,
 		Consumer: consumer,
 		Handler:  handler,
 	}
@@ -38,7 +46,6 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Run Kafka consumer
 	g.Go(func() error {
 		if err := s.Consumer.ConsumeWithRetry(ctx, s.Handler.HandleMessage, 3); err != nil && !errors.Is(err, context.Canceled) {
 			return err
@@ -46,9 +53,15 @@ func (s *Server) Start() error {
 		return nil
 	})
 
-	// Run scheduler readiness loop concurrently
 	g.Go(func() error {
 		if err := s.Handler.CheckForReadyTickets(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := s.Relay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return err
 		}
 		return nil

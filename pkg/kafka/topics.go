@@ -3,7 +3,7 @@ package kafka
 type EventMessage struct {
 	Topic string
 	Key   string
-	Event any
+	Event []byte
 }
 
 const (
