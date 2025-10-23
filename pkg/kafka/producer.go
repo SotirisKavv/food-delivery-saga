@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/events"
 	"time"
@@ -19,7 +18,7 @@ type ProducerConfig struct {
 }
 
 type DLQPublisher interface {
-	PublishToDLQ(ctx context.Context, event events.EventDLQ)
+	PublishToDLQ(ctx context.Context, event events.EventDLQ) error
 }
 
 func NewProducer(conf ProducerConfig) *Producer {
@@ -40,25 +39,14 @@ func NewProducer(conf ProducerConfig) *Producer {
 }
 
 func (p *Producer) PublishEvent(ctx context.Context, evtMessage EventMessage) error {
-	value, err := json.Marshal(evtMessage.Event)
-	if err != nil {
-		return svcerror.New(
-			svcerror.ErrInternalError,
-			svcerror.WithOp("Producer.PublishEvent"),
-			svcerror.WithMsg("marshal event"),
-			svcerror.WithCause(err),
-			svcerror.WithTime(time.Now().UTC()),
-		)
-	}
-
 	msg := kafka.Message{
 		Topic: evtMessage.Topic,
 		Key:   []byte(evtMessage.Key),
-		Value: value,
+		Value: evtMessage.Event,
 		Time:  time.Now(),
 	}
 
-	err = p.Writer.WriteMessages(ctx, msg)
+	err := p.Writer.WriteMessages(ctx, msg)
 	if err != nil {
 		return svcerror.New(
 			svcerror.ErrPublishError,

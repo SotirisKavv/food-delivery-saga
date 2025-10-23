@@ -106,7 +106,7 @@ func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) erro
 		return svcerror.AddOp(err, "Payment.OnRestaurantRejected")
 	}
 
-	result, err := h.Processor.RevertPayemnt(ctx, details)
+	result, err := h.Processor.RevertPayment(ctx, details)
 	if err != nil || !result.Success {
 		return svcerror.New(
 			svcerror.ErrBusinessError,

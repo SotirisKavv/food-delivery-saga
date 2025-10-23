@@ -29,7 +29,7 @@ func NewServer(prodConf kafka.ProducerConfig, consConf kafka.ConsumerConfig) *Se
 	relay := outbox.NewRelay(producer, database, kafka.TopicPayment)
 	handler := handler.NewHandler(database, relay)
 
-	consumer := kafka.NewConsumer(consConf)
+	consumer := kafka.NewConsumer(consConf, relay)
 
 	return &Server{
 		Producer: producer,

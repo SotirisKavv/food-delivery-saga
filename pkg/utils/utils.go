@@ -44,7 +44,7 @@ func SendValidationError(c *gin.Context, err error) {
 }
 
 func SendInternalError(c *gin.Context, message string) {
-	SendError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", message, "An internal error has occured")
+	SendError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", message, "An internal error has occurred")
 }
 
 func GetEnv(key, defaultValue string) string {

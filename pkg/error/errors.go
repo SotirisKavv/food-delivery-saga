@@ -31,7 +31,7 @@ func (e ServiceError) Error() string {
 	case ErrBusinessError:
 		return "Error"
 	default:
-		return "Uknown Service Error"
+		return "Unknown Service Error"
 	}
 }
 

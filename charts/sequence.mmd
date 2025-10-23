@@ -1,0 +1,54 @@
+%% Mermaid Sequence Diagram - Order Saga
+sequenceDiagram
+  participant C as Client
+  participant G as API Gateway
+  participant OB as Outbox Relay
+  participant K as Kafka
+  participant I as Inventory Svc
+  participant P as Payment Svc
+  participant R as Restaurant Svc
+  participant PG as PostgreSQL
+  participant RS as Redis
+
+  C->>G: POST /api/v1/orders
+  G->>PG: Insert order (PENDING) + outbox row
+  G->>OB: Save EventOrderPlaced
+  OB->>K: Publish order.events
+
+  K-->>I: EventOrderPlaced
+  I->>PG: Check/Update stock, Save reservation
+  I->>OB: Save ItemsReserved | ItemsReservationFailed
+  OB->>K: Publish inventory.events
+
+  K-->>G: ItemsReserved | ItemsReservationFailed
+  alt Reservation failed
+    G->>PG: Update order CANCELED (reason)
+  else Reservation succeeded
+    K-->>P: ItemsReserved
+    P->>RS: Cache PaymentDetails
+    P->>P: Mock processor: charge card
+    alt Payment authorized
+      P->>PG: Save payment
+      P->>OB: Save PaymentAuthorized
+      OB->>K: Publish payment.events
+      K-->>R: PaymentAuthorized
+      R->>PG: Load resto+prep, Update load, Save ticket
+      R->>OB: Save RestaurantAccepted
+      OB->>K: Publish restaurant.events
+      K-->>G: RestaurantAccepted
+      G->>PG: Update order ACCEPTED
+      Note over R: Scheduler waits ETA then...
+      R->>PG: Update ticket COMPLETED, reduce load
+      R->>OB: Save RestaurantReady
+      OB->>K: Publish restaurant.events
+      K-->>G: RestaurantReady
+      G->>PG: Update order COMPLETED
+    else Payment failed
+      P->>OB: Save PaymentFailed
+      OB->>K: Publish payment.events
+      K-->>I: PaymentFailed
+      I->>PG: Release items (reservation -> RELEASED)
+      K-->>G: PaymentFailed
+      G->>PG: Update order CANCELED
+    end
+  end

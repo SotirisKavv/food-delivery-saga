@@ -1,0 +1,25 @@
+%% Mermaid Flowchart - Order Saga
+flowchart TD
+  Start((Client places order)) --> SaveOrder["API Gateway: Save order (PENDING) + outbox"]
+  SaveOrder --> PublishOrder["Outbox relay -> Kafka order.events"]
+  PublishOrder --> Inv{"Inventory reserve items?"}
+  Inv -- Yes --> ItemsReserved["ItemsReserved"]
+  Inv -- No  --> ItemsFailed["ItemsReservationFailed -> Order CANCELED"]
+  ItemsFailed --> Canceled1["Gateway updates order to CANCELED"]
+  Canceled1 --> End
+
+  ItemsReserved --> Pay{"Payment authorized?"}
+  Pay -- Yes --> PayOK["PaymentAuthorized"]
+  Pay -- No  --> PayKO["PaymentFailed -> Inventory release; Order CANCELED"]
+  PayKO --> Canceled2["Gateway updates order to CANCELED"]
+  Canceled2 --> End
+
+  PayOK --> Resto{"Restaurant capacity OK?"}
+  Resto -- Yes --> RestoAccepted["RestaurantAccepted -> Ticket saved; ETA scheduled"]
+  Resto -- No  --> RestoRejected["RestaurantRejected -> Compensate payment; Release items; Order CANCELED"]
+  RestoRejected --> Canceled3["Gateway updates order to CANCELED"]
+  Canceled3 --> End
+
+  RestoAccepted --> Ready["Scheduler triggers RestaurantReady"]
+  Ready --> Complete["Gateway updates order to COMPLETED"]
+  Complete --> End((End))

@@ -1,0 +1,47 @@
+%% Mermaid C4 Container diagram
+C4Container
+ title Food Delivery Saga — Architecture (Container Diagram)
+
+ Person(user, "Customer", "Places orders via HTTP")
+
+ Container_Boundary(sys, "Food Delivery Saga") {
+   Container(gateway, "API Gateway", "Go + Gin", "HTTP API; order orchestration; outbox relay")
+   Container(inventory, "Inventory Service", "Go", "Reserves/releases items")
+   Container(payment, "Payment Service", "Go", "Authorizes/compensates payments (mock)")
+   Container(restaurant, "Restaurant Service", "Go", "Capacity, tickets, readiness")
+   ContainerDb(pg, "PostgreSQL", "Orders, Reservations, Tickets, Payments, Outbox")
+   ContainerDb(redis, "Redis", "Cache: payment details, tickets")
+
+   ContainerQueue(orderTopic, "order.events", "Kafka Topic", "OrderPlaced")
+   ContainerQueue(inventoryTopic, "inventory.events", "Kafka Topic", "ItemsReserved/Failed/Released")
+   ContainerQueue(paymentTopic, "payment.events", "Kafka Topic", "PaymentAuthorized/Failed")
+   ContainerQueue(restaurantTopic, "restaurant.events", "Kafka Topic", "RestaurantAccepted/Rejected/Ready")
+   ContainerQueue(dlqTopic, "dlq.events", "Kafka Topic", "Dead Letter Queue")
+ }
+
+ Rel(user, gateway, "HTTP", "REST")
+ Rel(gateway, pg, "Read/Write", "SQL")
+ Rel(gateway, orderTopic, "Publish via Outbox", "Kafka")
+ 
+ Rel(inventory, orderTopic, "Consume", "Kafka")
+ Rel(inventory, pg, "Read/Write", "SQL")
+ Rel(inventory, inventoryTopic, "Publish via Outbox", "Kafka")
+ 
+ Rel(payment, inventoryTopic, "Consume", "Kafka")
+ Rel(payment, redis, "Cache Payment Details", "Redis")
+ Rel(payment, pg, "Read/Write", "SQL")
+ Rel(payment, paymentTopic, "Publish via Outbox", "Kafka")
+ 
+ Rel(restaurant, paymentTopic, "Consume", "Kafka")
+ Rel(restaurant, pg, "Read/Write", "SQL")
+ Rel(restaurant, restaurantTopic, "Publish via Outbox", "Kafka")
+ 
+ Rel(gateway, inventoryTopic, "Consume", "Kafka")
+ Rel(gateway, paymentTopic, "Consume", "Kafka")
+ Rel(gateway, restaurantTopic, "Consume", "Kafka")
+ 
+ Rel(inventory, dlqTopic, "Publish on error", "Kafka")
+ Rel(payment, dlqTopic, "Publish on error", "Kafka")
+ Rel(restaurant, dlqTopic, "Publish on error", "Kafka")
+ 
+ UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")

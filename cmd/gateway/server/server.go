@@ -43,7 +43,7 @@ func NewServer(conf ServerConfig, prodConf kafka.ProducerConfig, consConf kafka.
 	orderService := service.NewService(database, relay)
 	orderHandler := handler.NewHandler(orderService)
 
-	consumer := kafka.NewConsumer(consConf)
+	consumer := kafka.NewConsumer(consConf, relay)
 
 	server := &Server{
 		Config:   conf,
@@ -65,7 +65,7 @@ func (s *Server) SetupRouter() {
 
 	//	middleware
 	router.Use(gin.Recovery())
-	//	TODO: add authentication, logging, error-handling
+	//	TODO: add authentication
 
 	// routes
 	api := router.Group("/api/v1")

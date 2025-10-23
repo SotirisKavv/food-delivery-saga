@@ -1,0 +1,79 @@
+%% Mermaid ER Diagram - Database Schema
+erDiagram
+  direction LR
+  RESTAURANTS {
+    string restaurant_id PK
+    bigint max_capacity
+    bigint curr_load
+    bigint parallelization_factor
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  RESTAURANTITEMS {
+    string sku PK
+    string restaurant_id PK, FK
+    bigint quantity
+    bigint prep_time
+  }
+  ORDERS {
+    string id PK
+    string customer_id
+    string restaurant_id FK
+    bigint amount_cents
+    string currency
+    enum status
+    string cancelation_reason
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  ORDERITEMS {
+    string sku PK
+    string orderId PK, FK
+    bigint quantity
+  }
+  RESERVATIONS {
+    string order_id PK, FK
+    string customer_id
+    string restaurant_id FK
+    enum status
+    timestamptz created_at
+  }
+  RESERVEDITEMS {
+    string sku PK
+    string order_id PK, FK
+    bigint quantity
+  }
+  PAYMENTS {
+    string order_id PK, FK
+    string customer_id
+    bigint amount
+    string currency
+    string pm_id
+    string transaction_id
+    timestamptz created_at
+  }
+  TICKETS {
+    string order_id PK, FK
+    string restaurant_id FK
+    bigint eta_minutes
+    timestamptz accepted_at
+    enum status
+  }
+  OUTBOX {
+    string id PK
+    string key
+    string event_type
+    string topic
+    jsonb payload
+    boolean published
+    timestamptz created_at
+  }
+
+  RESTAURANTS ||--o{ RESTAURANTITEMS : has
+  RESTAURANTS ||--o{ ORDERS : receives
+  ORDERS ||--o{ ORDERITEMS : contains
+  ORDERS ||--|| RESERVATIONS : holds
+  RESERVATIONS ||--o{ RESERVEDITEMS : includes
+  ORDERS ||--|| PAYMENTS : paid_by
+  ORDERS ||--|| TICKETS : scheduled_by
+  ORDERS }o..o{ OUTBOX : emits

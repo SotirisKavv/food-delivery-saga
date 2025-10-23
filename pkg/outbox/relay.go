@@ -130,7 +130,7 @@ func (r *Relay) PublishToDLQ(ctx context.Context, event events.EventDLQ) error {
 		)
 	}
 	if err := r.Producer.PublishEvent(ctx, kafka.EventMessage{
-		Topic: string(events.EvtTypeDeadLetterQueue),
+		Topic: kafka.TopicDeadLetterQueue,
 		Key:   event.Metadata.OrderId,
 		Event: payload,
 	}); err != nil {

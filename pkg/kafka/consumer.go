@@ -25,7 +25,7 @@ type ConsumerConfig struct {
 	GroupId string
 }
 
-func NewConsumer(conf ConsumerConfig) *Consumer {
+func NewConsumer(conf ConsumerConfig, relay DLQPublisher) *Consumer {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        conf.Brokers,
 		GroupTopics:    conf.Topics,
@@ -102,36 +102,44 @@ func (c *Consumer) RunWorker(ctx context.Context, handler MessageHandler, messag
 			}
 
 			if err := handler(ctx, KafkaMessage(msg)); err != nil {
-				var ed *svcerror.ErrorDetails
-				if errors.As(err, &ed) {
-					switch ed.Code {
-					case svcerror.ErrBusinessError:
-						log.Printf("Failed to handle message: %+v", err)
-					default:
-						var env events.EventEnvelope
-						json.Unmarshal(msg.Value, &env)
-
-						dlqError := events.EventDLQ{
-							ErrorDetails: err,
-							Payload:      msg.Value,
-							Metadata: events.Metadata{
-								MessageId:     uuid.NewString(),
-								Type:          events.EvtTypeDeadLetterQueue,
-								OrderId:       env.Metadata.OrderId,
-								CorrelationId: env.Metadata.CorrelationId,
-								CausationId:   env.Metadata.MessageId,
-								Timestamp:     time.Now().UTC(),
-							},
-						}
-						c.relay.PublishToDLQ(ctx, dlqError)
-					}
-				}
+				c.handleMessageError(ctx, err, msg)
 				continue
 			}
 
 			if err := c.reader.CommitMessages(ctx, msg); err != nil {
 				log.Printf("Failed to commit message: %v", err)
 			}
+		}
+	}
+}
+
+func (c *Consumer) handleMessageError(ctx context.Context, err error, msg kafka.Message) {
+	var ed *svcerror.ErrorDetails
+	if !errors.As(err, &ed) {
+		return
+	}
+
+	switch ed.Code {
+	case svcerror.ErrBusinessError:
+		log.Printf("Failed to handle message: %+v", err)
+	default:
+		var env events.EventEnvelope
+		_ = json.Unmarshal(msg.Value, &env)
+
+		dlqError := events.EventDLQ{
+			ErrorDetails: err,
+			Payload:      msg.Value,
+			Metadata: events.Metadata{
+				MessageId:     uuid.NewString(),
+				Type:          events.EvtTypeDeadLetterQueue,
+				OrderId:       env.Metadata.OrderId,
+				CorrelationId: env.Metadata.CorrelationId,
+				CausationId:   env.Metadata.MessageId,
+				Timestamp:     time.Now().UTC(),
+			},
+		}
+		if err := c.relay.PublishToDLQ(ctx, dlqError); err != nil {
+			log.Printf("Failed to publish to DLQ: %v", err)
 		}
 	}
 }

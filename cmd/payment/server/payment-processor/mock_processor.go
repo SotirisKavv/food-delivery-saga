@@ -75,7 +75,7 @@ func (m *MockPaymentProcessor) ProcessPayment(ctx context.Context, details model
 	}, nil
 }
 
-func (m *MockPaymentProcessor) RevertPayemnt(ctx context.Context, details models.PaymentDetails) (models.PaymentResult, error) {
+func (m *MockPaymentProcessor) RevertPayment(ctx context.Context, details models.PaymentDetails) (models.PaymentResult, error) {
 	log.Printf("[MOCK] Compensating customer %s, amount %d %s",
 		details.CustomerId,
 		details.Amount,
