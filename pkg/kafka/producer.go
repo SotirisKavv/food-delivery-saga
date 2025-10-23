@@ -3,7 +3,8 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	svcerror "food-delivery-saga/pkg/error"
+	"food-delivery-saga/pkg/events"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -15,6 +16,10 @@ type Producer struct {
 
 type ProducerConfig struct {
 	Brokers []string
+}
+
+type DLQPublisher interface {
+	PublishToDLQ(ctx context.Context, event events.EventDLQ)
 }
 
 func NewProducer(conf ProducerConfig) *Producer {
@@ -37,7 +42,13 @@ func NewProducer(conf ProducerConfig) *Producer {
 func (p *Producer) PublishEvent(ctx context.Context, evtMessage EventMessage) error {
 	value, err := json.Marshal(evtMessage.Event)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrInternalError,
+			svcerror.WithOp("Producer.PublishEvent"),
+			svcerror.WithMsg("marshal event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	msg := kafka.Message{
@@ -49,7 +60,13 @@ func (p *Producer) PublishEvent(ctx context.Context, evtMessage EventMessage) er
 
 	err = p.Writer.WriteMessages(ctx, msg)
 	if err != nil {
-		return fmt.Errorf("Failed to publish event: %w", err)
+		return svcerror.New(
+			svcerror.ErrPublishError,
+			svcerror.WithOp("Producer.PublishEvent"),
+			svcerror.WithMsg("failed to publish event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return nil
@@ -58,11 +75,6 @@ func (p *Producer) PublishMultipleEvents(ctx context.Context, events []EventMess
 	messages := make([]kafka.Message, len(events))
 
 	for i, event := range events {
-		// value, err := json.Marshal(event.Event)
-		// if err != nil {
-		// 	return fmt.Errorf("Failed to marshal event %d: %w", i, err)
-		// }
-
 		messages[i] = kafka.Message{
 			Topic: event.Topic,
 			Key:   []byte(event.Key),
@@ -73,7 +85,13 @@ func (p *Producer) PublishMultipleEvents(ctx context.Context, events []EventMess
 
 	err := p.Writer.WriteMessages(ctx, messages...)
 	if err != nil {
-		return fmt.Errorf("Failed to publish events: %w", err)
+		return svcerror.New(
+			svcerror.ErrPublishError,
+			svcerror.WithOp("Producer.PublishMultipleEvents"),
+			svcerror.WithMsg("failed to publish events"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return nil

@@ -1,7 +1,7 @@
 package scheduler
 
 import (
-	"errors"
+	svcerror "food-delivery-saga/pkg/error"
 	"sync"
 	"time"
 )
@@ -30,7 +30,12 @@ func (dq *DelayQueue[T]) Push(item Entry[T]) error {
 	defer dq.MU.Unlock()
 
 	if dq.Closed {
-		return errors.New("Delay Queue: queue is closed")
+		return svcerror.New(
+			svcerror.ErrInternalError,
+			svcerror.WithOp("Scheduler.Push"),
+			svcerror.WithMsg("delay queue is closed"),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	if old := dq.ByID[item.ID]; old != nil {

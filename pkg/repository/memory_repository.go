@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	svcerror "food-delivery-saga/pkg/error"
 	"sync"
 )
 
@@ -27,7 +28,11 @@ func (r *MemoryRepository[T]) Load(ctx context.Context, id string) (T, error) {
 	defer r.MU.RUnlock()
 	v, ok := r.Items[id]
 	if !ok {
-		return zero, fmt.Errorf(errFmtNotFound, id)
+		return zero, svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Repository.Memory.Load"),
+			svcerror.WithMsg(fmt.Sprintf(errFmtNotFound, id)),
+		)
 	}
 	return v, nil
 }
@@ -44,7 +49,11 @@ func (r *MemoryRepository[T]) Update(ctx context.Context, entity T) error {
 	defer r.MU.Unlock()
 	id := r.IdFn(entity)
 	if _, ok := r.Items[id]; !ok {
-		return fmt.Errorf(errFmtNotFound, id)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Repository.Memory.Update"),
+			svcerror.WithMsg(fmt.Sprintf(errFmtNotFound, id)),
+		)
 	}
 	r.Items[id] = entity
 	return nil
@@ -54,7 +63,11 @@ func (r *MemoryRepository[T]) Delete(ctx context.Context, id string) error {
 	r.MU.Lock()
 	defer r.MU.Unlock()
 	if _, ok := r.Items[id]; !ok {
-		return fmt.Errorf(errFmtNotFound, id)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Repository.Memory.Delete"),
+			svcerror.WithMsg(fmt.Sprintf(errFmtNotFound, id)),
+		)
 	}
 	delete(r.Items, id)
 	return nil

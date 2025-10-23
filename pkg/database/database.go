@@ -3,11 +3,13 @@ package database
 import (
 	"context"
 	"fmt"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/models"
 	"food-delivery-saga/pkg/utils"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,7 +35,23 @@ func (d *Database) GetOrder(ctx context.Context, orderId string) (models.Order, 
 	var order models.Order
 	row := d.DB.QueryRow(ctx, query, orderId)
 	err := row.Scan(&order.OrderId, &order.Status, &order.CancelationReason)
-	return order, err
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return order, svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithOp("Database.GetOrder"),
+				svcerror.WithMsg(fmt.Sprintf("order %s not found", orderId)),
+				svcerror.WithTime(time.Now().UTC()),
+			)
+		}
+		return order, svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.GetOrder"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return order, nil
 }
 
 func (d *Database) SaveOrder(ctx context.Context, order models.Order) error {
@@ -55,11 +73,23 @@ func (d *Database) SaveOrder(ctx context.Context, order models.Order) error {
 	if _, err := d.DB.Exec(ctx, orderQuery,
 		order.OrderId, order.CustomerId, order.RestaurantId,
 		order.Amount, order.Currency, string(order.Status)); err != nil {
-		return err
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SaveOrder"),
+			svcerror.WithMsg("failed to insert into orders"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	if _, err := d.DB.Exec(ctx, orderItemQuery, values...); err != nil {
-		return err
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SaveOrder"),
+			svcerror.WithMsg("failed to insert order items"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return nil
@@ -71,7 +101,16 @@ func (d *Database) UpdateOrderStatus(ctx context.Context, order models.Order) er
 			  WHERE id = $4;`
 	_, err := d.DB.Exec(ctx, query,
 		string(order.Status), order.CancelationReason, time.Now().UTC(), order.OrderId)
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.UpdateOrderStatus"),
+			svcerror.WithMsg(fmt.Sprintf("failed to update order %s", order.OrderId)),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 
 }
 
@@ -86,14 +125,32 @@ func (d *Database) GetRestaurantStock(ctx context.Context, restoId string) (mode
 
 	rows, err := d.DB.Query(ctx, query, restoId)
 	if err != nil {
-		return restaurant, err
+		if err == pgx.ErrNoRows {
+			return restaurant, svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithOp("Database.GetRestaurantStock"),
+				svcerror.WithMsg(fmt.Sprintf("restaurant %s not found", restoId)),
+				svcerror.WithTime(time.Now().UTC()),
+			)
+		}
+		return restaurant, svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.GetRestaurantStock"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var item models.Item
 		if err := rows.Scan(&restaurant.RestaurantId, &item.SKU, &item.Quantity); err != nil {
-			return restaurant, err
+			return restaurant, svcerror.New(
+				svcerror.ErrDatabaseError,
+				svcerror.WithOp("Database.GetRestaurantStock"),
+				svcerror.WithCause(err),
+				svcerror.WithTime(time.Now().UTC()),
+			)
 		}
 		restaurant.Items[item.SKU] = item
 	}
@@ -112,7 +169,20 @@ func (d *Database) GetRestaurantAndPreparationInfo(ctx context.Context, restoId 
 
 	rows, err := d.DB.Query(ctx, query, restoId)
 	if err != nil {
-		return restaurant, err
+		if err == pgx.ErrNoRows {
+			return restaurant, svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithOp("Database.GetRestaurantAndPreparationInfo"),
+				svcerror.WithMsg(fmt.Sprintf("restaurant %s not found", restoId)),
+				svcerror.WithTime(time.Now().UTC()),
+			)
+		}
+		return restaurant, svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.GetRestaurantAndPreparationInfo"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 	defer rows.Close()
 
@@ -124,7 +194,12 @@ func (d *Database) GetRestaurantAndPreparationInfo(ctx context.Context, restoId 
 			&item.SKU, &item.PrepTime,
 		)
 		if err != nil {
-			return restaurant, err
+			return restaurant, svcerror.New(
+				svcerror.ErrDatabaseError,
+				svcerror.WithOp("Database.GetRestaurantAndPreparationInfo"),
+				svcerror.WithCause(err),
+				svcerror.WithTime(time.Now().UTC()),
+			)
 		}
 		restaurant.Items[item.SKU] = item
 	}
@@ -149,13 +224,31 @@ func (d *Database) UpdateRestaurantStock(ctx context.Context, restaurant models.
 
 	query = fmt.Sprintf(query, strings.Join(placeholders, ","))
 	_, err := d.DB.Exec(ctx, query, values...)
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.UpdateRestaurantStock"),
+			svcerror.WithMsg(fmt.Sprintf("failed to update stock for %s", restaurant.RestaurantId)),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 func (d *Database) UpdateRestaurantLoad(ctx context.Context, restaurant models.Restaurant) error {
 	query := `UPDATE restaurants SET curr_load = $1 WHERE restaurant_id = $2;`
 	_, err := d.DB.Exec(ctx, query, restaurant.CurrentLoad, restaurant.RestaurantId)
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.UpdateRestaurantLoad"),
+			svcerror.WithMsg(fmt.Sprintf("failed to update load of %s", restaurant.RestaurantId)),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 // ITEM RESERVATIONS
@@ -177,11 +270,23 @@ func (d *Database) SaveReservation(ctx context.Context, reservation models.ItemR
 
 	if _, err := d.DB.Exec(ctx, reservationQuery,
 		reservation.OrderId, reservation.CustomerId, reservation.RestaurantId); err != nil {
-		return err
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SaveReservation"),
+			svcerror.WithMsg("failed to insert into reservations"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	if _, err := d.DB.Exec(ctx, reservedItemsQuery, values...); err != nil {
-		return err
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SaveReservation"),
+			svcerror.WithMsg("failed to insert reserved items"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return nil
@@ -197,14 +302,32 @@ func (d *Database) GetReservedItems(ctx context.Context, reservationId string) (
 
 	rows, err := d.DB.Query(ctx, query, reservationId)
 	if err != nil {
-		return reservation, err
+		if err == pgx.ErrNoRows {
+			return reservation, svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithOp("Database.GetReservedItems"),
+				svcerror.WithMsg(fmt.Sprintf("reservation %s not found", reservationId)),
+				svcerror.WithTime(time.Now().UTC()),
+			)
+		}
+		return reservation, svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.GetReservedItems"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var item models.Item
 		if err := rows.Scan(&reservation.RestaurantId, &item.SKU, &item.Quantity); err != nil {
-			return reservation, err
+			return reservation, svcerror.New(
+				svcerror.ErrDatabaseError,
+				svcerror.WithOp("Database.GetReservedItems"),
+				svcerror.WithCause(err),
+				svcerror.WithTime(time.Now().UTC()),
+			)
 		}
 		reservation.ReservedItems[item.SKU] = item
 	}
@@ -216,7 +339,16 @@ func (d *Database) UpdateReservationReleased(ctx context.Context, reservationId 
 			  SET status = 'RELEASED'
 			  WHERE order_id = $1;`
 	_, err := d.DB.Exec(ctx, query, reservationId)
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.UpdateReservationReleased"),
+			svcerror.WithMsg(fmt.Sprintf("failed to update status of %s", reservationId)),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 // PAYMENTS
@@ -227,7 +359,16 @@ func (d *Database) SavePayment(ctx context.Context, details models.PaymentDetail
 		details.OrderId, details.CustomerId, details.Amount,
 		details.Currency, details.PaymentMethodId, txnId)
 
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SavePayment"),
+			svcerror.WithMsg("failed to insert into payments"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 func (d *Database) GetPayment(ctx context.Context, paymentId string) (models.PaymentDetails, error) {
@@ -240,7 +381,23 @@ func (d *Database) GetPayment(ctx context.Context, paymentId string) (models.Pay
 		&details.CustomerId, &details.Amount, &details.Currency,
 		&details.PaymentMethodId,
 	)
-	return details, err
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return details, svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithOp("Database.GetPayment"),
+				svcerror.WithMsg(fmt.Sprintf("payment %s not found", paymentId)),
+				svcerror.WithTime(time.Now().UTC()),
+			)
+		}
+		return details, svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.GetPayment"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return details, nil
 }
 
 // TICKETS
@@ -252,7 +409,16 @@ func (d *Database) SaveTicket(ctx context.Context, ticket models.Ticket) error {
 		ticket.ETAminutes.Seconds(), ticket.AcceptedAt,
 	)
 
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SaveTicket"),
+			svcerror.WithMsg("failed to insert into tickets"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 func (d *Database) UpdateTicketCompleted(ctx context.Context, ticketId string) error {
@@ -260,7 +426,16 @@ func (d *Database) UpdateTicketCompleted(ctx context.Context, ticketId string) e
 			  SET status = 'COMPLETED'
 			  WHERE order_id = $1;`
 	_, err := d.DB.Exec(ctx, query, ticketId)
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.UpdateTicketCompleted"),
+			svcerror.WithMsg(fmt.Sprintf("failed to update status of %s", ticketId)),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 // OUTBOX
@@ -270,7 +445,16 @@ func (d *Database) SaveOutbox(ctx context.Context, outbox models.Outbox) error {
 	_, err := d.DB.Exec(ctx, query,
 		outbox.Id, outbox.Key, outbox.EventType, outbox.Payload, outbox.Topic,
 	)
-	return err
+	if err != nil {
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.SaveOutbox"),
+			svcerror.WithMsg("failed to insertinto outbox"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 func (d *Database) GetUnpublishedOutbox(ctx context.Context, limit int, topic string) ([]models.Outbox, error) {
@@ -280,7 +464,12 @@ func (d *Database) GetUnpublishedOutbox(ctx context.Context, limit int, topic st
 			  LIMIT $2 FOR UPDATE SKIP LOCKED;`
 	rows, err := d.DB.Query(ctx, query, topic, limit)
 	if err != nil {
-		return nil, err
+		return nil, svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.GetUnpublishedOutbox"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 	defer rows.Close()
 
@@ -288,7 +477,12 @@ func (d *Database) GetUnpublishedOutbox(ctx context.Context, limit int, topic st
 	for rows.Next() {
 		var outbox models.Outbox
 		if err := rows.Scan(&outbox.Id, &outbox.Key, &outbox.EventType, &outbox.Payload); err != nil {
-			return nil, err
+			return nil, svcerror.New(
+				svcerror.ErrDatabaseError,
+				svcerror.WithOp("Database.GetUnpublishedOutbox"),
+				svcerror.WithCause(err),
+				svcerror.WithTime(time.Now().UTC()),
+			)
 		}
 		batch = append(batch, outbox)
 	}
@@ -299,7 +493,12 @@ func (d *Database) GetUnpublishedOutbox(ctx context.Context, limit int, topic st
 func (d *Database) UpdateOutboxPublished(ctx context.Context, ids []string) error {
 	query := `UPDATE outbox SET published = TRUE WHERE id = ANY($1::text[]);`
 	if _, err := d.DB.Exec(ctx, query, ids); err != nil {
-		return err
+		return svcerror.New(
+			svcerror.ErrDatabaseError,
+			svcerror.WithOp("Database.UpdateOutboxPublished"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 	return nil
 }

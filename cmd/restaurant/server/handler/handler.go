@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"food-delivery-saga/pkg/database"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
 	"food-delivery-saga/pkg/outbox"
 	"food-delivery-saga/pkg/repository"
 	"food-delivery-saga/pkg/scheduler"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,7 +63,7 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 	}
 
 	if err := h.TicketRepo.Save(ctx, ticket); err != nil {
-		return fmt.Errorf("Failed to save ticket %s: %w", ticket.OrderId, err)
+		return svcerror.AddOp(err, "Restaurant.OnItemsReserved")
 	}
 
 	return nil
@@ -75,12 +75,14 @@ func (h *Handler) OnPaymentAuthorized(evt events.EventPaymentProcessed) error {
 
 	ticket, err := h.TicketRepo.Load(ctx, ticketKeyPrefix+evt.Metadata.OrderId)
 	if err != nil {
-		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to retrieve ticket: %+v", err))
+		ed := svcerror.AddOp(err, "Restaurant.OnPaymentAuthorized")
+		return h.PublishRestaurantRejected(ctx, evt, ed.Error())
 	}
 
 	restaurant, err := h.Database.GetRestaurantAndPreparationInfo(ctx, ticket.RestaurantId)
 	if err != nil {
-		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to retrieve restaurant: %+v", err))
+		ed := svcerror.AddOp(err, "Restaurant.OnPaymentAuthorized")
+		return h.PublishRestaurantRejected(ctx, evt, ed.Error())
 	}
 
 	var totalPrepTime int64
@@ -92,26 +94,33 @@ func (h *Handler) OnPaymentAuthorized(evt events.EventPaymentProcessed) error {
 	load := restaurant.CurrentLoad + totalPrepTime
 
 	if load > restaurant.CapacityMax {
-		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("The restaurant's %s load capacity is reached", restaurant.RestaurantId))
+		ed := svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithMsg(fmt.Sprintf("The restaurant's %s load capacity is reached", restaurant.RestaurantId)),
+		)
+		return h.PublishRestaurantRejected(ctx, evt, ed.Error())
 	}
 
 	restaurant.CurrentLoad = load
 	err = h.Database.UpdateRestaurantLoad(ctx, restaurant)
 	if err != nil {
-		return h.PublishRestaurantRejected(ctx, evt, fmt.Sprintf("Failed to update restaurant: %+v", err))
+		ed := svcerror.AddOp(err, "Restaurant.OnPaymentAuthorized")
+		return h.PublishRestaurantRejected(ctx, evt, ed.Error())
 	}
 	ticket.ETAminutes = time.Duration(load) * time.Second
 	ticket.AcceptedAt = time.Now()
 
 	if err := h.Database.SaveTicket(ctx, ticket); err != nil {
-		return fmt.Errorf("Failed to save ticket (id=%s): %w", ticket.OrderId, err)
+		return svcerror.AddOp(err, "Restaurant.OnPaymentAuthorized")
 	}
 
-	h.TicketScheduler.Push(scheduler.Entry[models.Ticket]{
+	if err := h.TicketScheduler.Push(scheduler.Entry[models.Ticket]{
 		ID:      ticket.OrderId,
 		Value:   ticket,
 		ReadyAt: ticket.AcceptedAt.Add(ticket.ETAminutes),
-	})
+	}); err != nil {
+		return svcerror.AddOp(err, "Restaurant.OnPaymentAuthorized")
+	}
 	return h.PublishRestaurantAccepted(ctx, ticket, evt)
 }
 
@@ -120,19 +129,18 @@ func (h *Handler) CheckForReadyTickets(ctx context.Context) error {
 		ticket := item.Value
 		restaurant, err := h.Database.GetRestaurantAndPreparationInfo(ctx, ticket.RestaurantId)
 		if err != nil {
-			return fmt.Errorf("Failed to retrieve restaurant (id=%s): %w", ticket.RestaurantId, err)
+			return svcerror.AddOp(err, "Restaurant.CheckForReadyTickets")
 		}
 
 		restaurant.CurrentLoad -= int64(ticket.ETAminutes.Seconds())
 		if err := h.Database.UpdateRestaurantLoad(ctx, restaurant); err != nil {
-			return fmt.Errorf("Failed to update restaurant (id=%s): %w", ticket.RestaurantId, err)
+			return svcerror.AddOp(err, "Restaurant.CheckForReadyTickets")
 		}
 		if err := h.Database.UpdateTicketCompleted(ctx, ticket.OrderId); err != nil {
-			return fmt.Errorf("Failed to update ticket (id=%s): %w", ticket.OrderId, err)
+			return svcerror.AddOp(err, "Restaurant.CheckForReadyTickets")
 		}
-
 		if err := h.PublishRestaurantReady(ctx, ticket); err != nil {
-			log.Printf("[HANDLER] Failed to pop ticket out of the scheduler: %v", err)
+			return svcerror.AddOp(err, "Restaurant.CheckForReadyTickets")
 		}
 	}
 	return nil
@@ -156,7 +164,12 @@ func (h *Handler) PublishRestaurantRejected(ctx context.Context, evt events.Even
 
 	payload, err := json.Marshal(rejectionEvt)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Restaurant.PublishRestaurantRejected"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)
@@ -180,7 +193,12 @@ func (h *Handler) PublishRestaurantAccepted(ctx context.Context, ticket models.T
 
 	payload, err := json.Marshal(acceptanceEvt)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Restaurant.PublishRestaurantRejected"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)
@@ -202,7 +220,12 @@ func (h *Handler) PublishRestaurantReady(ctx context.Context, ticket models.Tick
 
 	payload, err := json.Marshal(readyEvt)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Restaurant.PublishRestaurantRejected"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)

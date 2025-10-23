@@ -2,7 +2,7 @@ package repository
 
 import (
 	"context"
-	"fmt"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/utils"
 	"time"
 )
@@ -39,11 +39,15 @@ func NewRepository[T any](ctx context.Context, repoType RepositoryType, idExtrac
 		ttl, _ := time.ParseDuration(utils.GetEnv("REDIS_CLIENT_TTL", "0"))
 		redisRepo, err := NewRedisCache(ctx, redisConf, ttl, idExtractor)
 		if err != nil {
-			return nil, err
+			return nil, svcerror.AddOp(err, "Repository.NewRepository")
 		}
 		repo = redisRepo
 	default:
-		return nil, fmt.Errorf("Failed to create Repository Handler: Unsupported Repository Type")
+		return nil, svcerror.New(
+			svcerror.ErrRepositoryError,
+			svcerror.WithOp("Repository.NewRepository"),
+			svcerror.WithMsg("unsupported repository type"),
+		)
 	}
 
 	return repo, nil

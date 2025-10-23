@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"food-delivery-saga/pkg/database"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
@@ -45,23 +46,29 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 
 	inventory, err := h.Database.GetRestaurantStock(ctx, evt.RestaurantId)
 	if err != nil {
-		return fmt.Errorf("Failed to load Restaurant with id %s: %+v", evt.RestaurantId, err)
+		return svcerror.AddOp(err, "Inventory.OnOrderPlaced.LoadStock")
 	}
 
 	for id, item := range evt.Items {
 		dish, ok := inventory.Items[id]
 		if !ok {
-			failureReason := fmt.Sprintf("Item %s not available in restaurant %s", id, evt.RestaurantId)
-			log.Printf(failureReason)
-			return h.PublishItemsReservationFailed(ctx, evt, failureReason)
+			ed := svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithMsg(fmt.Sprintf("[HANDLER] item %s not available in restaurant %s",
+					id, evt.RestaurantId)),
+			)
+			return h.PublishItemsReservationFailed(ctx, evt, ed.Error())
 		}
 
 		if dish.Quantity < item.Quantity {
-			failureReason := fmt.Sprintf("Restaurant %s has less quantity of %s (needed: %d, has: %d)",
-				evt.RestaurantId, id, item.Quantity, dish.Quantity,
+
+			ed := svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithMsg(fmt.Sprintf("restaurant %s has less quantity of %s (needed: %d, has: %d)",
+					evt.RestaurantId, id, item.Quantity, dish.Quantity,
+				)),
 			)
-			log.Printf(failureReason)
-			return h.PublishItemsReservationFailed(ctx, evt, failureReason)
+			return h.PublishItemsReservationFailed(ctx, evt, ed.Error())
 		}
 	}
 
@@ -72,8 +79,8 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	}
 
 	if err := h.Database.UpdateRestaurantStock(ctx, inventory); err != nil {
-		failureReason := fmt.Sprintf("Failed to update inventory: %+v", err)
-		return h.PublishItemsReservationFailed(ctx, evt, failureReason)
+		ed := svcerror.AddOp(err, "Inventory.OnOrderPlaced")
+		return h.PublishItemsReservationFailed(ctx, evt, ed.Error())
 	}
 	log.Printf("Current Inventory after update: %+v", inventory)
 
@@ -85,8 +92,8 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	}
 
 	if err := h.Database.SaveReservation(ctx, reservation); err != nil {
-		failureReason := fmt.Sprintf("Failed to save reservation: %+v", err)
-		return h.PublishItemsReservationFailed(ctx, evt, failureReason)
+		ed := svcerror.AddOp(err, "Inventory.OnOrderPlaced")
+		return h.PublishItemsReservationFailed(ctx, evt, ed.Error())
 	}
 
 	return h.PublishItemsReserved(ctx, evt)
@@ -97,9 +104,8 @@ func (h *Handler) OnPaymentFailed(evt events.EventPaymentProcessed) error {
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	if failureReason := h.HandleServiceFailure(ctx, evt.Metadata.OrderId); failureReason != "" {
-		payload, _ := json.Marshal(evt)
-		return h.PublishToDLQ(ctx, evt.Metadata, payload, failureReason)
+	if err := h.HandleServiceFailure(ctx, evt.Metadata.OrderId); err != nil {
+		return svcerror.AddOp(err, "Inventory.OnPaymentFailed")
 	}
 	return nil
 }
@@ -108,44 +114,45 @@ func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) erro
 	ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 
-	if failureReason := h.HandleServiceFailure(ctx, evt.Metadata.OrderId); failureReason != "" {
-		payload, _ := json.Marshal(evt)
-		return h.PublishToDLQ(ctx, evt.Metadata, payload, failureReason)
+	if err := h.HandleServiceFailure(ctx, evt.Metadata.OrderId); err != nil {
+		return svcerror.AddOp(err, "Inventory.OnRestaurantRejected")
 	}
 	return nil
 }
 
-func (h *Handler) HandleServiceFailure(ctx context.Context, orderId string) string {
+func (h *Handler) HandleServiceFailure(ctx context.Context, orderId string) error {
 	reservation, err := h.Database.GetReservedItems(ctx, orderId)
 	if err != nil {
-		return fmt.Sprintf("Failed to save reservation: %+v", err)
+		return svcerror.AddOp(err, "Inventory.HandleServiceFailure")
 	}
 
 	inventory, err := h.Database.GetRestaurantStock(ctx, reservation.RestaurantId)
 	if err != nil {
-		return fmt.Sprintf("Failed to load Restaurant with id %s: %+v", reservation.RestaurantId, err)
+		return svcerror.AddOp(err, "Inventory.HandleServiceFailure")
 	}
 
 	for id, item := range reservation.ReservedItems {
 		dish, ok := inventory.Items[id]
 		if !ok {
-			failureReason := fmt.Sprintf("Item %s not available in Restaurant %s", id, reservation.RestaurantId)
-			log.Printf(failureReason)
-			return failureReason
+			return svcerror.New(
+				svcerror.ErrBusinessError,
+				svcerror.WithMsg(fmt.Sprintf("item %s not available in restaurant %s", id, reservation.RestaurantId)),
+				svcerror.WithOp("Inventory.HandleServiceFailure"),
+			)
 		}
 		dish.Quantity += item.Quantity
 		inventory.Items[id] = dish
 	}
 
 	if err := h.Database.UpdateRestaurantStock(ctx, inventory); err != nil {
-		return fmt.Sprintf("Failed to update Inventory: %+v", err)
+		return svcerror.AddOp(err, "Inventory.HandleServiceFailure")
 	}
 	if err := h.Database.UpdateReservationReleased(ctx, reservation.OrderId); err != nil {
-		return fmt.Sprintf("Failed to update Inventory: %+v", err)
+		return svcerror.AddOp(err, "Inventory.HandleServiceFailure")
 	}
-	log.Printf("Current Inventory after update: %+v", inventory)
+	log.Printf("[HANDLER] Current Inventory after update: %+v", inventory)
 
-	return ""
+	return nil
 }
 
 func (h *Handler) PublishItemsReservationFailed(ctx context.Context, evt events.EventOrderPlaced, reason string) error {
@@ -166,7 +173,13 @@ func (h *Handler) PublishItemsReservationFailed(ctx context.Context, evt events.
 
 	payload, err := json.Marshal(reservationFailed)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Inventory.PublishItemsReservationFailed"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)
@@ -190,30 +203,14 @@ func (h *Handler) PublishItemsReserved(ctx context.Context, evt events.EventOrde
 
 	payload, err := json.Marshal(itemsReserved)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrInternalError,
+			svcerror.WithOp("Inventory.PublishItemsReserved"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)
-}
-
-func (h *Handler) PublishToDLQ(ctx context.Context, mtdt events.Metadata, payload []byte, reason string) error {
-	dlqError := events.EventDLQ{
-		Metadata: events.Metadata{
-			MessageId:     uuid.NewString(),
-			CausationId:   mtdt.MessageId,
-			CorrelationId: mtdt.CorrelationId,
-			Type:          events.EvtTypeDeadLetterQueue,
-			OrderId:       mtdt.OrderId,
-			Timestamp:     time.Now(),
-			Producer:      events.ProducerPaymentSvc,
-		},
-		ErrorDetails: events.ErrorDetails{
-			Message:   reason,
-			Service:   events.ProducerPaymentSvc,
-			OccuredAt: time.Now(),
-		},
-		Payload: payload,
-	}
-
-	return h.Relay.PublishToDLQ(ctx, dlqError)
 }

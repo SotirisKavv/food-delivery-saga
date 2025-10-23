@@ -2,14 +2,21 @@ package kafka
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	svcerror "food-delivery-saga/pkg/error"
+	"food-delivery-saga/pkg/events"
 	"log"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 )
 
 type Consumer struct {
 	reader *kafka.Reader
+	relay  DLQPublisher
 }
 
 type ConsumerConfig struct {
@@ -38,6 +45,19 @@ type KafkaMessage kafka.Message
 type MessageHandler func(ctx context.Context, message KafkaMessage) error
 
 func (c *Consumer) ConsumeMessages(ctx context.Context, handler MessageHandler) error {
+	partChannels := make(map[int]chan kafka.Message)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	defer func() {
+		mu.Lock()
+		for _, ch := range partChannels {
+			close(ch)
+		}
+		mu.Unlock()
+		wg.Wait()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -49,8 +69,63 @@ func (c *Consumer) ConsumeMessages(ctx context.Context, handler MessageHandler) 
 				continue
 			}
 
+			partition := msg.Partition
+
+			mu.Lock()
+			ch, ok := partChannels[partition]
+			if !ok {
+				ch = make(chan kafka.Message, 1024)
+				partChannels[partition] = ch
+				wg.Add(1)
+				go c.RunWorker(ctx, handler, ch)
+			}
+			mu.Unlock()
+
+			select {
+			case ch <- msg:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+}
+
+func (c *Consumer) RunWorker(ctx context.Context, handler MessageHandler, messageChannel <-chan kafka.Message) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-messageChannel:
+			if !ok {
+				return
+			}
+
 			if err := handler(ctx, KafkaMessage(msg)); err != nil {
-				log.Printf("Failed to handle message: %v", err) //	TODO: implement send to DLQ
+				var ed *svcerror.ErrorDetails
+				if errors.As(err, &ed) {
+					switch ed.Code {
+					case svcerror.ErrBusinessError:
+						log.Printf("Failed to handle message: %+v", err)
+					default:
+						var env events.EventEnvelope
+						json.Unmarshal(msg.Value, &env)
+
+						dlqError := events.EventDLQ{
+							ErrorDetails: err,
+							Payload:      msg.Value,
+							Metadata: events.Metadata{
+								MessageId:     uuid.NewString(),
+								Type:          events.EvtTypeDeadLetterQueue,
+								OrderId:       env.Metadata.OrderId,
+								CorrelationId: env.Metadata.CorrelationId,
+								CausationId:   env.Metadata.MessageId,
+								Timestamp:     time.Now().UTC(),
+							},
+						}
+						c.relay.PublishToDLQ(ctx, dlqError)
+					}
+				}
 				continue
 			}
 

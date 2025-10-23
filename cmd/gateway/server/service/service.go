@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"food-delivery-saga/pkg/database"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/models"
 	"food-delivery-saga/pkg/outbox"
@@ -42,12 +42,12 @@ func NewService(database *database.Database, relay *outbox.Relay) *Service {
 func (s *Service) CreateOrder(ctx context.Context, req *models.OrderRequest) (*models.OrderResponse, error) {
 	order, err := s.SaveOrder(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to save Order: %w", err)
+		return nil, svcerror.AddOp(err, "OrderGateway.CreateOrder")
 	}
 
 	orderEvent, err := s.PublishOrderPlaced(ctx, order.OrderId, req)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to publish event: %w", err)
+		return nil, svcerror.AddOp(err, "OrderGateway.CreateOrder")
 	}
 
 	return &models.OrderResponse{
@@ -71,7 +71,7 @@ func (s *Service) SaveOrder(ctx context.Context, req *models.OrderRequest) (*mod
 	}
 
 	if err := s.Database.SaveOrder(ctx, order); err != nil {
-		return nil, err
+		return nil, svcerror.AddOp(err, "OrderGateway.SaveOrder")
 	}
 
 	return &order, nil
@@ -97,11 +97,16 @@ func (s *Service) PublishOrderPlaced(ctx context.Context, orderId string, req *m
 
 	payload, err := json.Marshal(orderEvent)
 	if err != nil {
-		return nil, err
+		return nil, svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("OrderGateway.PublishOrderPlaced"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+		)
 	}
 
 	if err := s.Relay.SaveOutboxEvent(ctx, payload); err != nil {
-		return nil, err
+		return nil, svcerror.AddOp(err, "OrderGateway.PublishOrderPlaced")
 	}
 
 	return &orderEvent, nil
@@ -110,7 +115,7 @@ func (s *Service) PublishOrderPlaced(ctx context.Context, orderId string, req *m
 func (s *Service) GetOrder(ctx context.Context, id string) (*models.OrderResponse, error) {
 	order, err := s.Database.GetOrder(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, svcerror.AddOp(err, "OrderGateway.GetOrder")
 	}
 
 	var message string
@@ -133,20 +138,20 @@ func (s *Service) OnItemsProcessed(evt events.EventItemsProcessed) error {
 
 	order, err := s.Database.GetOrder(ctx, evt.Metadata.OrderId)
 	if err != nil {
-		return fmt.Errorf("Failed to retrieve Order with Id %s: %w", evt.Metadata.OrderId, err)
+		return svcerror.AddOp(err, "OrderGateway.OnItemsProcessed")
 	}
 
 	switch evt.Metadata.Type {
 	case events.EvtTypeItemsReleased:
 		order.Status = models.ORDER_STATUS_RESERVED
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnItemsProcessed")
 		}
 	case events.EvtTypeItemsReservationFailed:
 		order.Status = models.ORDER_STATUS_CANCELED
 		order.CancelationReason = evt.Reason
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnItemsProcessed")
 		}
 	}
 
@@ -159,20 +164,20 @@ func (s *Service) OnPaymentProcessed(evt events.EventPaymentProcessed) error {
 
 	order, err := s.Database.GetOrder(ctx, evt.Metadata.OrderId)
 	if err != nil {
-		return fmt.Errorf("Failed to retrieve Order with Id %s: %w", evt.Metadata.OrderId, err)
+		return svcerror.AddOp(err, "OrderGateway.OnPaymentProcessed")
 	}
 
 	switch evt.Metadata.Type {
 	case events.EvtTypePaymentAuthorized:
 		order.Status = models.ORDER_STATUS_AUTHORIZED
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnPaymentProcessed")
 		}
 	case events.EvtTypePaymentFailed:
 		order.Status = models.ORDER_STATUS_CANCELED
 		order.CancelationReason = evt.Reason
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnPaymentProcessed")
 		}
 	}
 
@@ -185,25 +190,25 @@ func (s *Service) OnRestaurantProcessed(evt events.EventRestaurantProcessed) err
 
 	order, err := s.Database.GetOrder(ctx, evt.Metadata.OrderId)
 	if err != nil {
-		return fmt.Errorf("Failed to retrieve Order with Id %s: %w", evt.Metadata.OrderId, err)
+		return svcerror.AddOp(err, "OrderGateway.OnRestaurantProcessed")
 	}
 
 	switch evt.Metadata.Type {
 	case events.EvtTypeRestaurantAccepted:
 		order.Status = models.ORDER_STATUS_ACCEPTED
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnRestaurantProcessed")
 		}
 	case events.EvtTypeRestaurantRejected:
 		order.Status = models.ORDER_STATUS_CANCELED
 		order.CancelationReason = evt.Reason
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnRestaurantProcessed")
 		}
 	case events.EvtTypeRestaurantReady:
 		order.Status = models.ORDER_STATUS_COMPLETED
 		if err := s.Database.UpdateOrderStatus(ctx, order); err != nil {
-			return fmt.Errorf("Failed to update Order with Id %s: %w", evt.Metadata.OrderId, err)
+			return svcerror.AddOp(err, "OrderGateway.OnRestaurantProcessed")
 		}
 	}
 

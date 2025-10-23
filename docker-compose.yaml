@@ -67,8 +67,7 @@ services:
     volumes:
       - ./deployments/kafka/topics.conf:/topics.conf:ro
       - ./deployments/kafka/setup-topics.sh:/setup-topics.sh:ro
-    command: ["bash", "/setup-topics.sh"]
-    restart: "no"
+    command: ["sh", "-c", 'tr -d "\r" < /setup-topics.sh > /tmp/setup-topics.sh && chmod +x /tmp/setup-topics.sh && sh /tmp/setup-topics.sh']
     networks:
       - order-network
 

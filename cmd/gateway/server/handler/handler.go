@@ -46,7 +46,7 @@ func (h *Handler) GetOrder(c *gin.Context) {
 
 	response, err := h.OrderService.GetOrder(c, id)
 	if err != nil {
-		utils.SendInternalError(c, fmt.Sprintf("Failed to retrive Order %s: %+v", id, err))
+		utils.SendInternalError(c, fmt.Sprintf("Failed to retrieve Order %s: %+v", id, err))
 		return
 	}
 

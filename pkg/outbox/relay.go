@@ -3,8 +3,9 @@ package outbox
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"food-delivery-saga/pkg/database"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
@@ -56,7 +57,15 @@ func (r *Relay) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if err := r.FlushMessages(ctx); err != nil {
-				log.Printf("Failed to flush outbox: %+v", err)
+				switch {
+				case errors.Is(err, svcerror.ErrBusinessError) || errors.Is(err, svcerror.ErrInternalError):
+					if ed := new(svcerror.ErrorDetails); errors.As(err, &ed) {
+						log.Printf("[ERROR] msg=%s trace=%s cause=%v at=%s",
+							ed.Msg, ed.TraceString(), ed.Cause, ed.OccuredAt)
+					}
+				default:
+					return svcerror.AddOp(err, "Outbox.Run")
+				}
 			}
 		}
 	}
@@ -65,7 +74,7 @@ func (r *Relay) Run(ctx context.Context) error {
 func (r *Relay) FlushMessages(ctx context.Context) error {
 	batch, err := r.Database.GetUnpublishedOutbox(ctx, r.Batch, r.Topic)
 	if err != nil {
-		return fmt.Errorf("Failed to retrieve outbox: %w", err)
+		return svcerror.AddOp(err, "Outbox.FlushMessages")
 	}
 
 	if len(batch) == 0 {
@@ -74,7 +83,7 @@ func (r *Relay) FlushMessages(ctx context.Context) error {
 
 	err = r.PublishMessages(ctx, batch)
 	if err != nil {
-		return fmt.Errorf("Failed to publish events: %w", err)
+		return svcerror.AddOp(err, "Outbox.FlushMessages")
 	}
 
 	ids := make([]string, 0, len(batch))
@@ -83,7 +92,7 @@ func (r *Relay) FlushMessages(ctx context.Context) error {
 	}
 
 	if err := r.Database.UpdateOutboxPublished(ctx, ids); err != nil {
-		return fmt.Errorf("Failed to update outbox: %w", err)
+		return svcerror.AddOp(err, "Outbox.FlushMessages")
 	}
 	return nil
 }
@@ -97,27 +106,55 @@ func (r *Relay) PublishMessages(ctx context.Context, batch []models.Outbox) erro
 			Event: outbox.Payload,
 		})
 	}
-
-	return r.Producer.PublishMultipleEvents(ctx, msgs)
+	if err := r.Producer.PublishMultipleEvents(ctx, msgs); err != nil {
+		return svcerror.New(
+			svcerror.ErrPublishError,
+			svcerror.WithOp("Outbox.PublishMessages"),
+			svcerror.WithMsg("failed to publish multiple events"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 func (r *Relay) PublishToDLQ(ctx context.Context, event events.EventDLQ) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrInternalError,
+			svcerror.WithOp("Outbox.PublishToDLQ"),
+			svcerror.WithMsg("failed to marshal dlq event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
-
-	return r.Producer.PublishEvent(ctx, kafka.EventMessage{
+	if err := r.Producer.PublishEvent(ctx, kafka.EventMessage{
 		Topic: string(events.EvtTypeDeadLetterQueue),
 		Key:   event.Metadata.OrderId,
 		Event: payload,
-	})
+	}); err != nil {
+		return svcerror.New(
+			svcerror.ErrPublishError,
+			svcerror.WithOp("Outbox.PublishToDLQ"),
+			svcerror.WithMsg("failed to publish dlq event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
+	}
+	return nil
 }
 
 func (r *Relay) SaveOutboxEvent(ctx context.Context, raw []byte) error {
 	var env events.EventEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("Failed to unmarshal payload: %w", err)
+		return svcerror.New(
+			svcerror.ErrInternalError,
+			svcerror.WithOp("Outbox.SaveOutboxEvent"),
+			svcerror.WithMsg("unmarshal payload"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	outbox := models.Outbox{
@@ -129,7 +166,7 @@ func (r *Relay) SaveOutboxEvent(ctx context.Context, raw []byte) error {
 	}
 
 	if err := r.Database.SaveOutbox(ctx, outbox); err != nil {
-		return fmt.Errorf("Failed to save outbox: %w", err)
+		return svcerror.AddOp(err, "Outbox.SaveOutboxEvent")
 	}
 
 	return nil

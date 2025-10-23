@@ -3,9 +3,9 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	paymentprocessor "food-delivery-saga/cmd/payment/server/payment-processor"
 	"food-delivery-saga/pkg/database"
+	svcerror "food-delivery-saga/pkg/error"
 	"food-delivery-saga/pkg/events"
 	"food-delivery-saga/pkg/kafka"
 	"food-delivery-saga/pkg/models"
@@ -65,7 +65,7 @@ func (h *Handler) OnOrderPlaced(evt events.EventOrderPlaced) error {
 	}
 
 	if err := h.Repository.Save(ctx, details); err != nil {
-		return fmt.Errorf("Failed to save payment %s: %w", details.OrderId, err)
+		return svcerror.AddOp(err, "Payment.OnOrderPlaced")
 	}
 
 	return nil
@@ -77,16 +77,21 @@ func (h *Handler) OnItemsReserved(evt events.EventItemsProcessed) error {
 
 	details, err := h.Repository.Load(ctx, paymentKeyPrefix+evt.Metadata.OrderId)
 	if err != nil {
-		return h.PublishPaymentFailed(ctx, evt, fmt.Sprintf("Failed to retrieve payment details: %+v", err))
+		ed := svcerror.AddOp(err, "Payment.OnItemsReserved")
+		return h.PublishPaymentFailed(ctx, evt, ed.Error())
 	}
 
 	result, err := h.Processor.ProcessPayment(ctx, details)
 	if err != nil || !result.Success {
-		return h.PublishPaymentFailed(ctx, evt, result.FailureReason)
+		ed := svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithMsg(result.FailureReason),
+		)
+		return h.PublishPaymentFailed(ctx, evt, ed.Error())
 	}
 
 	if err := h.Database.SavePayment(ctx, details, result.TransactionID); err != nil {
-		return fmt.Errorf("Failed to save payment %s: %w", details.OrderId, err)
+		return svcerror.AddOp(err, "Payment.OnItemsReserved")
 	}
 
 	return h.PublishPaymentAuthorized(ctx, result, evt)
@@ -98,12 +103,16 @@ func (h *Handler) OnRestaurantRejected(evt events.EventRestaurantProcessed) erro
 
 	details, err := h.Database.GetPayment(ctx, evt.Metadata.OrderId)
 	if err != nil {
-		return h.PublishToDLQ(ctx, evt, fmt.Sprintf("Failed to retrieve payment details: %+v", err))
+		return svcerror.AddOp(err, "Payment.OnRestaurantRejected")
 	}
 
 	result, err := h.Processor.RevertPayemnt(ctx, details)
 	if err != nil || !result.Success {
-		return h.PublishToDLQ(ctx, evt, result.FailureReason)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithMsg(result.FailureReason),
+			svcerror.WithCause(err),
+		)
 	}
 
 	return nil
@@ -126,7 +135,13 @@ func (h *Handler) PublishPaymentFailed(ctx context.Context, evt events.EventItem
 
 	payload, err := json.Marshal(paymentFailed)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Payment.PublishPaymentFailed"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)
@@ -151,35 +166,14 @@ func (h *Handler) PublishPaymentAuthorized(ctx context.Context, result models.Pa
 
 	payload, err := json.Marshal(paymentAuthorized)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal event: %w", err)
+		return svcerror.New(
+			svcerror.ErrBusinessError,
+			svcerror.WithOp("Payment.PublishPaymentAuthorized"),
+			svcerror.WithMsg("failed to marshal event"),
+			svcerror.WithCause(err),
+			svcerror.WithTime(time.Now().UTC()),
+		)
 	}
 
 	return h.Relay.SaveOutboxEvent(ctx, payload)
-}
-
-func (h *Handler) PublishToDLQ(ctx context.Context, evt events.EventRestaurantProcessed, reason string) error {
-	payload, err := json.Marshal(evt)
-	if err != nil {
-		return fmt.Errorf("Failes to marshal event: %w", err)
-	}
-
-	dlqError := events.EventDLQ{
-		Metadata: events.Metadata{
-			MessageId:     uuid.NewString(),
-			CausationId:   evt.Metadata.MessageId,
-			CorrelationId: evt.Metadata.CorrelationId,
-			Type:          events.EvtTypeDeadLetterQueue,
-			OrderId:       evt.Metadata.OrderId,
-			Timestamp:     time.Now(),
-			Producer:      events.ProducerPaymentSvc,
-		},
-		ErrorDetails: events.ErrorDetails{
-			Message:   reason,
-			Service:   events.ProducerPaymentSvc,
-			OccuredAt: time.Now(),
-		},
-		Payload: payload,
-	}
-
-	return h.Relay.PublishToDLQ(ctx, dlqError)
 }

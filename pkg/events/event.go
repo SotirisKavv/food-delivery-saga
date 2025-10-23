@@ -38,12 +38,6 @@ type Metadata struct {
 	Producer      string    `json:"producer"`
 }
 
-type ErrorDetails struct {
-	Message   string
-	Service   string
-	OccuredAt time.Time
-}
-
 type DomainEvent interface {
 	GetMetadata() Metadata
 }
@@ -98,9 +92,9 @@ func (rp EventRestaurantProcessed) GetMetadata() Metadata { return rp.Metadata }
 
 // Dead Letter Queue
 type EventDLQ struct {
-	Metadata     Metadata     `json:"mtdt"`
-	ErrorDetails ErrorDetails `json:"error"`
-	Payload      []byte       `json:"payload"`
+	Metadata     Metadata `json:"mtdt"`
+	ErrorDetails error    `json:"error"`
+	Payload      []byte   `json:"payload"`
 }
 
 func (dlq EventDLQ) GetMetadata() Metadata { return dlq.Metadata }
